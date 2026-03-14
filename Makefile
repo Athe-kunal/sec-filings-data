@@ -2,7 +2,7 @@ MODEL := allenai/olmOCR-2-7B-1025-FP8
 
 GPU_MEMORY_UTILIZATION ?= 0.97
 MAX_MODEL_LEN          ?= 16384
-TENSOR_PARALLEL_SIZE   ?= 2
+TENSOR_PARALLEL_SIZE   ?= 1
 DATA_PARALLEL_SIZE     ?= 1
 PORT                   ?= 8000
 SERVER                 ?= localhost
@@ -14,7 +14,14 @@ vllm-olmocr-serve:
 		--max-model-len $(MAX_MODEL_LEN) \
 		--tensor-parallel-size $(TENSOR_PARALLEL_SIZE) \
 		--data-parallel-size $(DATA_PARALLEL_SIZE) \
-		--max-num-batched_tokens 65536 \
-		--max-num-seqs 8192 \
 		--port $(PORT) \
 		--host $(SERVER)
+
+.PHONY: guidellm-benchmark
+guidellm-benchmark:
+	uv run guidellm benchmark \
+		--target "http://localhost:$(PORT)" \
+		--profile sweep \
+		--max-seconds 300 \
+		--data "prompt_tokens=8192,output_tokens=4096" \
+		--output-path benchmark.yaml
