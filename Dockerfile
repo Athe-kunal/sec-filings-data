@@ -24,8 +24,8 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 
-# Optional: browser binaries are large. Leave disabled by default.
-ARG INSTALL_PLAYWRIGHT_BROWSER=0
+# Install browser binaries by default for SEC scraping workflows.
+ARG INSTALL_PLAYWRIGHT_BROWSER=1
 
 # Install only runtime dependencies into a dedicated venv and aggressively clean caches.
 RUN uv sync --frozen --no-dev \

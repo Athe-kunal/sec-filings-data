@@ -20,11 +20,11 @@ Settings are loaded via Pydantic Settings from environment variables or a `.env`
 docker build -t sec-filings-md .
 ```
 
-The image now defaults to a smaller footprint by using the CUDA runtime base and skipping Playwright browser binaries at build time.
-If you want Chromium preinstalled in the image, build with:
+The image now defaults to a smaller footprint by using the CUDA runtime base while still preinstalling Playwright Chromium for scraping.
+If you want to skip Playwright browser installation (to reduce image size further), build with:
 
 ```bash
-docker build --build-arg INSTALL_PLAYWRIGHT_BROWSER=1 -t sec-filings-md .
+docker build --build-arg INSTALL_PLAYWRIGHT_BROWSER=0 -t sec-filings-md .
 ```
 
 Or via Makefile:
