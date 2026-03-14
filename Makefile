@@ -1,10 +1,11 @@
 MODEL := allenai/olmOCR-2-7B-1025-FP8
 
-GPU_MEMORY_UTILIZATION ?= 1.00
+GPU_MEMORY_UTILIZATION ?= 0.98
 MAX_MODEL_LEN          ?= 16384
 TENSOR_PARALLEL_SIZE   ?= 1
 DATA_PARALLEL_SIZE     ?= 1
 PORT                   ?= 8000
+API_PORT               ?= 8081
 SERVER                 ?= localhost
 
 .PHONY: vllm-olmocr-serve
@@ -19,6 +20,10 @@ vllm-olmocr-serve:
 		--max-num-seqs 8192 \
 		--port $(PORT) \
 		--host $(SERVER)
+
+.PHONY: start-server
+start-server:
+	uv run uvicorn server:app --reload --port $(API_PORT)
 
 .PHONY: guidellm-benchmark
 guidellm-benchmark:

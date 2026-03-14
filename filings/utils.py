@@ -97,6 +97,8 @@ def get_cik_by_ticker(ticker: str) -> str:
     response = requests.get(url, stream=True, headers=headers)
     response.raise_for_status()
     results = cik_re.findall(response.text)
+    if not results:
+        raise ValueError(f"Couldn't find the CIK for {ticker=}")
     return str(results[0])
 
 

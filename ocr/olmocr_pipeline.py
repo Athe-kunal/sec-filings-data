@@ -47,9 +47,16 @@ from settings import olmocr_settings
 DEFAULT_SERVER = olmocr_settings.olmocr_server
 DEFAULT_MODEL = olmocr_settings.olmocr_model
 DEFAULT_WORKSPACE = olmocr_settings.olmocr_workspace
+
+
+def _inject_logger_name(record):
+    record["extra"].setdefault("name", record["name"])
+
+
 # Loguru: same format as before (asctime - name - levelname - message)
 _LOG_FMT = "{time:YYYY-MM-DD HH:mm:ss} - {extra[name]} - {level} - {message}"
 _loguru_logger.remove()
+_loguru_logger = _loguru_logger.patch(_inject_logger_name)
 _loguru_logger.add(sys.stderr, format=_LOG_FMT, level="INFO")
 logger = _loguru_logger.bind(name=__name__)
 server_logger = _loguru_logger.bind(name="vllm")
