@@ -8,7 +8,7 @@ PORT                   ?= 8000
 API_PORT               ?= 8081
 SERVER                 ?= localhost
 IMAGE_NAME             ?= sec-filings-md
-GPU_DEVICE             ?= 0
+GPU_DEVICE             ?= 3
 SEC_API_ORGANIZATION   ?= Your-Organization
 SEC_API_EMAIL          ?= your-email@example.com
 
@@ -55,3 +55,11 @@ docker-run:
 
 .PHONY: docker-start
 docker-start: docker-build docker-run
+
+.PHONY: docker-stop
+docker-stop:
+	docker ps -q --filter "publish=$(API_PORT)" | xargs -r docker stop
+
+.PHONY: docker-remove
+docker-remove:
+	docker ps -aq --filter "publish=$(API_PORT)" | xargs -r docker rm
