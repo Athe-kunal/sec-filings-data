@@ -1,3 +1,4 @@
+from rich.themes import DEFAULT
 import argparse
 import asyncio
 import atexit
@@ -22,6 +23,7 @@ from urllib.parse import urlparse
 
 import httpx
 from huggingface_hub import snapshot_download
+from loguru import logger as _loguru_logger
 from PIL import Image
 from pypdf import PdfReader
 from tqdm import tqdm
@@ -40,25 +42,17 @@ from olmocr.train.dataloader import FrontMatterParser
 from olmocr.version import VERSION
 from olmocr.work_queue import LocalBackend, WorkQueue
 
-# Initialize logger
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-logger.propagate = False
+DEFAULT_SERVER = os.environ.get("OLMOCR_SERVER", "http://localhost:8000/v1")
+DEFAULT_MODEL = "allenai/olmOCR-2-7B-1025-FP8"
+DEFAULT_WORKSPACE = "./localworkspace"
+# Loguru: same format as before (asctime - name - levelname - message)
+_LOG_FMT = "{time:YYYY-MM-DD HH:mm:ss} - {extra[name]} - {level} - {message}"
+_loguru_logger.remove()
+_loguru_logger.add(sys.stderr, format=_LOG_FMT, level="INFO")
+logger = _loguru_logger.bind(name=__name__)
+server_logger = _loguru_logger.bind(name="vllm")
 
-server_logger = logging.getLogger("vllm")
-server_logger.propagate = False
-
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-console_handler.setFormatter(
-    logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-)
-
-# Add console handler to loggers (file handler added later if disk logging enabled)
-logger.addHandler(console_handler)
-server_logger.addHandler(console_handler)
-
-# Quiet logs from pypdf
+# Quiet logs from pypdf (standard library logger)
 logging.getLogger("pypdf").setLevel(logging.ERROR)
 
 # Global variables for token statistics
@@ -82,7 +76,7 @@ pdf_render_max_workers_limit = asyncio.BoundedSemaphore(
 )
 max_concurrent_requests_limit = asyncio.BoundedSemaphore(
     1
-)  # Actual value set by args in main()
+)  # Actual value set in run_ocr
 
 # Filter object, cached so it will only get loaded when/if you need it
 get_pdf_filter = cache(
@@ -92,6 +86,34 @@ get_pdf_filter = cache(
         apply_form_check=True,
     )
 )
+
+
+@dataclass
+class OcrConfig:
+    """Pipeline configuration. Built from run_ocr parameters."""
+
+    workspace: str
+    pdfs: list[str] | None
+    model: str
+    pages_per_group: int
+    max_page_retries: int
+    max_page_error_rate: float
+    workers: int
+    max_concurrent_requests: int
+    max_server_ready_timeout: int
+    apply_filter: bool
+    markdown: bool
+    target_longest_image_dim: int
+    target_anchor_text_len: int
+    guided_decoding: bool
+    disk_logging: str | None
+    server: str | None
+    api_key: str | None
+    gpu_memory_utilization: float | None
+    max_model_len: int
+    tensor_parallel_size: int
+    data_parallel_size: int
+    port: int
 
 
 @dataclass(frozen=True)
@@ -169,7 +191,7 @@ async def build_page_query(
 
 
 async def try_single_page(
-    args,
+    config: OcrConfig,
     pdf_orig_path: str,
     pdf_local_path: str,
     page_num: int,
@@ -180,25 +202,26 @@ async def try_single_page(
     Try processing a single page once. Returns PageResult on success, None on failure.
     Does NOT handle retries - caller is responsible for retry logic.
     """
-    COMPLETION_URL = f"{args.server.rstrip('/')}/chat/completions"
+    assert config.server, "server URL must be set"
+    COMPLETION_URL = f"{config.server.rstrip('/')}/chat/completions"
     MODEL_MAX_CONTEXT = 16384
 
     temp_idx = min(attempt, len(TEMPERATURE_BY_ATTEMPT) - 1)
     temperature = TEMPERATURE_BY_ATTEMPT[temp_idx]
 
-    api_key = args.api_key if args.server and hasattr(args, "api_key") else None
+    api_key = config.api_key if config.server and config.api_key else None
 
     try:
         query = await build_page_query(
             pdf_local_path,
             page_num,
-            args.target_longest_image_dim,
+            config.target_longest_image_dim,
             image_rotation=rotation,
-            model_name=args.model,
+            model_name=config.model,
         )
         query["temperature"] = temperature
 
-        if args.guided_decoding:
+        if config.guided_decoding:
             query["guided_regex"] = (
                 r"---\nprimary_language: (?:[a-z]{2}|null)\nis_rotation_valid: (?:True|False|true|false)\nrotation_correction: (?:0|90|180|270)\nis_table: (?:True|False|true|false)\nis_diagram: (?:True|False|true|false)\n(?:---|---\n[\s\S]+)"
             )
@@ -284,7 +307,7 @@ def make_fallback_result(
 
 
 async def try_single_page_with_backoff(
-    args,
+    config: OcrConfig,
     pdf_orig_path: str,
     pdf_local_path: str,
     page_num: int,
@@ -299,7 +322,7 @@ async def try_single_page_with_backoff(
     for backoff_count in range(MAX_BACKOFF_ATTEMPTS):
         try:
             return await try_single_page(
-                args, pdf_orig_path, pdf_local_path, page_num, attempt, rotation
+                config, pdf_orig_path, pdf_local_path, page_num, attempt, rotation
             )
         except (ConnectionError, OSError, asyncio.TimeoutError) as e:
             sleep_delay = 10 * (2**backoff_count)
@@ -316,7 +339,11 @@ async def try_single_page_with_backoff(
 
 
 async def process_page(
-    args, worker_id: int, pdf_orig_path: str, pdf_local_path: str, page_num: int
+    config: OcrConfig,
+    worker_id: int,
+    pdf_orig_path: str,
+    pdf_local_path: str,
+    page_num: int,
 ) -> PageResult:
     """
     Process a single page with retry logic:
@@ -325,7 +352,7 @@ async def process_page(
     3. If rotation error: retry sequentially (need model feedback for rotation correction)
     4. If other error: fire all remaining retries in parallel (if queue empty) or sequential
     """
-    MAX_RETRIES = args.max_page_retries
+    MAX_RETRIES = config.max_page_retries
     retry_attempts = list(range(1, MAX_RETRIES))
     cumulative_rotation = 0
 
@@ -333,7 +360,7 @@ async def process_page(
 
     # === First attempt ===
     result = await try_single_page_with_backoff(
-        args,
+        config,
         pdf_orig_path,
         pdf_local_path,
         page_num,
@@ -358,7 +385,7 @@ async def process_page(
 
         for attempt in retry_attempts:
             result = await try_single_page_with_backoff(
-                args,
+                config,
                 pdf_orig_path,
                 pdf_local_path,
                 page_num,
@@ -405,7 +432,7 @@ async def process_page(
     # === Non-rotation error path: sequential, but switch to parallel if queue empties ===
     for i, attempt in enumerate(retry_attempts):
         result = await try_single_page_with_backoff(
-            args,
+            config,
             pdf_orig_path,
             pdf_local_path,
             page_num,
@@ -431,7 +458,7 @@ async def process_page(
             tasks = [
                 asyncio.create_task(
                     try_single_page_with_backoff(
-                        args,
+                        config,
                         pdf_orig_path,
                         pdf_local_path,
                         page_num,
@@ -585,7 +612,7 @@ def is_tarball_path(path: str) -> bool:
     return lower.endswith(".tar.gz") or lower.endswith(".tgz")
 
 
-async def process_tarball(args, worker_id: int, tarball_path: str) -> list:
+async def process_tarball(config: OcrConfig, worker_id: int, tarball_path: str) -> list:
     """Process all PDFs inside a tarball concurrently and return list of Dolma documents."""
     logger.info(f"Worker {worker_id} processing tarball {tarball_path}")
 
@@ -618,7 +645,7 @@ async def process_tarball(args, worker_id: int, tarball_path: str) -> list:
         # Process all PDFs concurrently
         async with asyncio.TaskGroup() as tg:
             tasks = [
-                tg.create_task(process_single_pdf(args, worker_id, src, local))
+                tg.create_task(process_single_pdf(config, worker_id, src, local))
                 for src, local in pdf_files
             ]
 
@@ -632,12 +659,15 @@ async def process_tarball(args, worker_id: int, tarball_path: str) -> list:
 
 
 async def process_single_pdf(
-    args, worker_id: int, pdf_orig_path: str, local_pdf_path: str
+    config: OcrConfig,
+    worker_id: int,
+    pdf_orig_path: str,
+    local_pdf_path: str,
 ):
     """Process a single PDF that's already on disk.
 
     Args:
-        args: Pipeline arguments
+        config: Pipeline configuration
         worker_id: Worker ID for logging
         pdf_orig_path: Original path (for metadata, can be tarball::internal format)
         local_pdf_path: Local path to the PDF file
@@ -659,7 +689,7 @@ async def process_single_pdf(
             f"Got {num_pages} pages to do for {pdf_orig_path} in worker {worker_id}"
         )
 
-        if args.apply_filter and get_pdf_filter().filter_out_pdf(local_pdf_path):
+        if config.apply_filter and get_pdf_filter().filter_out_pdf(local_pdf_path):
             logger.info(f"Filtering out pdf {pdf_orig_path}")
             return None
 
@@ -671,7 +701,7 @@ async def process_single_pdf(
             for page_num in range(1, num_pages + 1):
                 task = tg.create_task(
                     process_page(
-                        args, worker_id, pdf_orig_path, local_pdf_path, page_num
+                        config, worker_id, pdf_orig_path, local_pdf_path, page_num
                     )
                 )
                 page_tasks.append(task)
@@ -684,9 +714,9 @@ async def process_single_pdf(
             page_result.is_fallback for page_result in page_results
         )
 
-        if num_fallback_pages / num_pages > args.max_page_error_rate:
+        if num_fallback_pages / num_pages > config.max_page_error_rate:
             logger.error(
-                f"Document {pdf_orig_path} has {num_fallback_pages} fallback pages out of {num_pages} exceeding max_page_error_rate of {args.max_page_error_rate}, discarding document."
+                f"Document {pdf_orig_path} has {num_fallback_pages} fallback pages out of {num_pages} exceeding max_page_error_rate of {config.max_page_error_rate}, discarding document."
             )
             return None
         elif num_fallback_pages > 0:
@@ -700,7 +730,7 @@ async def process_single_pdf(
         return None
 
 
-async def process_pdf(args, worker_id: int, pdf_orig_path: str):
+async def process_pdf(config: OcrConfig, worker_id: int, pdf_orig_path: str):
     """Process a single PDF from local path and return a Dolma document."""
     if not os.path.exists(pdf_orig_path):
         logger.info(f"File not found, skipping {pdf_orig_path}")
@@ -724,7 +754,7 @@ async def process_pdf(args, worker_id: int, pdf_orig_path: str):
             tf.flush()
 
     try:
-        return await process_single_pdf(args, worker_id, pdf_orig_path, tf.name)
+        return await process_single_pdf(config, worker_id, pdf_orig_path, tf.name)
     finally:
         if os.path.exists(tf.name):
             os.unlink(tf.name)
@@ -835,7 +865,7 @@ def get_markdown_path(workspace: str, source_file: str) -> str:
     return markdown_path
 
 
-async def worker(args, work_queue: WorkQueue, worker_id):
+async def worker(config: OcrConfig, work_queue: WorkQueue, worker_id: int):
     while True:
 
         work_item = await work_queue.get_work()
@@ -854,11 +884,11 @@ async def worker(args, work_queue: WorkQueue, worker_id):
                     if is_tarball_path(path):
                         # Tarball returns a list of docs, so we handle it specially
                         dolma_tasks.append(
-                            tg.create_task(process_tarball(args, worker_id, path))
+                            tg.create_task(process_tarball(config, worker_id, path))
                         )
                     else:
                         dolma_tasks.append(
-                            tg.create_task(process_pdf(args, worker_id, path))
+                            tg.create_task(process_pdf(config, worker_id, path))
                         )
                 logger.info(f"Created all tasks for {work_item.hash}")
 
@@ -883,7 +913,7 @@ async def worker(args, work_queue: WorkQueue, worker_id):
             logger.info(f"Got {len(dolma_docs)} docs for {work_item.hash}")
 
             # If --markdown flag is set, also write the natural text to markdown files
-            if args.markdown:
+            if config.markdown:
                 logger.info(
                     f"Writing {len(dolma_docs)} markdown files for {work_item.hash}"
                 )
@@ -893,7 +923,7 @@ async def worker(args, work_queue: WorkQueue, worker_id):
                         doc["text"], doc["attributes"]["pdf_page_numbers"]
                     )
 
-                    markdown_path = get_markdown_path(args.workspace, source_file)
+                    markdown_path = get_markdown_path(config.workspace, source_file)
                     markdown_dir = os.path.dirname(markdown_path)
                     os.makedirs(markdown_dir, exist_ok=True)
                     with open(markdown_path, "w") as md_f:
@@ -916,31 +946,33 @@ async def worker(args, work_queue: WorkQueue, worker_id):
             )
 
 
-async def vllm_server_task(model_name_or_path, args, unknown_args=None):
+async def vllm_server_task(
+    model_name_or_path: str, config: OcrConfig, unknown_args: list[str] | None = None
+):
     cmd = [
         "vllm",
         "serve",
         model_name_or_path,
         "--port",
-        str(args.port),
+        str(config.port),
         "--disable-log-requests",
         "--uvicorn-log-level",
         "warning",
         "--served-model-name",
         "olmocr",
         "--tensor-parallel-size",
-        str(args.tensor_parallel_size),
+        str(config.tensor_parallel_size),
         "--data-parallel-size",
-        str(args.data_parallel_size),
+        str(config.data_parallel_size),
         "--limit-mm-per-prompt",
         '{"video": 0}',  # Disabling video encoder saves RAM that you can put towards the KV cache, thanks @charitarthchugh
     ]
 
-    if args.gpu_memory_utilization is not None:
-        cmd.extend(["--gpu-memory-utilization", str(args.gpu_memory_utilization)])
+    if config.gpu_memory_utilization is not None:
+        cmd.extend(["--gpu-memory-utilization", str(config.gpu_memory_utilization)])
 
-    if args.max_model_len is not None:
-        cmd.extend(["--max-model-len", str(args.max_model_len)])
+    if config.max_model_len is not None:
+        cmd.extend(["--max-model-len", str(config.max_model_len)])
 
     if unknown_args:
         cmd.extend(unknown_args)
@@ -1029,12 +1061,14 @@ async def vllm_server_task(model_name_or_path, args, unknown_args=None):
     await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
 
 
-async def vllm_server_host(model_name_or_path, args, unknown_args=None):
+async def vllm_server_host(
+    model_name_or_path: str, config: OcrConfig, unknown_args: list[str] | None = None
+):
     MAX_RETRIES = 5
     retry = 0
 
     while retry < MAX_RETRIES:
-        await vllm_server_task(model_name_or_path, args, unknown_args)
+        await vllm_server_task(model_name_or_path, config, unknown_args)
         logger.warning("VLLM server task ended")
         retry += 1
 
@@ -1049,16 +1083,17 @@ async def vllm_server_host(model_name_or_path, args, unknown_args=None):
         sys.exit(1)
 
 
-async def vllm_server_ready(args):
-    max_attempts = args.max_server_ready_timeout
+async def vllm_server_ready(config: OcrConfig):
+    assert config.server, "server URL must be set"
+    max_attempts = config.max_server_ready_timeout
     delay_sec = 1
-    url = f"{args.server.rstrip('/')}/models"
+    url = f"{config.server.rstrip('/')}/models"
 
     for attempt in range(1, max_attempts + 1):
         try:
             headers = {}
-            if args.server and hasattr(args, "api_key") and args.api_key:
-                headers["Authorization"] = f"Bearer {args.api_key}"
+            if config.server and config.api_key:
+                headers["Authorization"] = f"Bearer {config.api_key}"
 
             async with httpx.AsyncClient() as session:
                 response = await session.get(url, headers=headers)
@@ -1112,184 +1147,96 @@ async def metrics_reporter(work_queue):
         await asyncio.sleep(10)
 
 
-async def main():
-    parser = argparse.ArgumentParser(
-        description="Manager for running millions of PDFs through a batch inference pipeline."
-    )
-    parser.add_argument(
-        "workspace",
-        help="Local filesystem path where work will be stored.",
-    )
-    parser.add_argument(
-        "--pdfs",
-        nargs="*",
-        help="Local paths to add to the workspace: PDF/image files, .tar.gz tarballs, or a .txt file listing paths (one per line).",
-        default=None,
-    )
-    parser.add_argument(
-        "--model",
-        help="Path where the model is located (local directory or Hugging Face repo). Default: allenai/olmOCR-2-7B-1025-FP8",
-        default="allenai/olmOCR-2-7B-1025-FP8",
-    )
+async def run_olmo_ocr(
+    workspace: str = DEFAULT_WORKSPACE,
+    pdfs: list[str] | None = None,
+    model: str = DEFAULT_MODEL,
+    pages_per_group: int | None = None,
+    max_page_retries: int = 8,
+    max_page_error_rate: float = 0.004,
+    workers: int = 20,
+    max_concurrent_requests: int = 1600,
+    max_server_ready_timeout: int = 600,
+    apply_filter: bool = False,
+    markdown: bool = False,
+    target_longest_image_dim: int = 1288,
+    target_anchor_text_len: int = -1,
+    guided_decoding: bool = False,
+    disk_logging: str | None = None,
+    server: str | None = DEFAULT_SERVER,
+    api_key: str | None = None,
+    gpu_memory_utilization: float | None = None,
+    max_model_len: int = 16384,
+    tensor_parallel_size: int = 1,
+    data_parallel_size: int = 1,
+    port: int = 30024,
+    unknown_args: list[str] | None = None,
+):
+    """Run the OCR pipeline with the given options. All parameters have the same defaults as the CLI."""
+    if unknown_args is None:
+        unknown_args = []
 
-    # More detailed config options, usually you shouldn't have to change these
-    parser.add_argument(
-        "--pages_per_group",
-        type=int,
-        default=argparse.SUPPRESS,
-        help="Aiming for this many pdf pages per work item group",
-    )
-    parser.add_argument(
-        "--max_page_retries",
-        type=int,
-        default=8,
-        help="Max number of times we will retry rendering a page",
-    )
-    parser.add_argument(
-        "--max_page_error_rate",
-        type=float,
-        default=0.004,
-        help="Rate of allowable failed pages in a document, 1/250 by default",
-    )
-    parser.add_argument(
-        "--workers", type=int, default=20, help="Number of workers to run at a time"
-    )
-    parser.add_argument(
-        "--max_concurrent_requests",
-        type=int,
-        default=1600,
-        help="Max number of concurrent VLLM server requests at a time.",
-    )
-    parser.add_argument(
-        "--max_server_ready_timeout",
-        type=int,
-        default=600,
-        help="Number of seconds to wait for vllm to become ready before exiting.",
-    )
-    parser.add_argument(
-        "--apply_filter",
-        action="store_true",
-        help="Apply basic filtering to English pdfs which are not forms, and not likely seo spam",
-    )
-    parser.add_argument(
-        "--markdown",
-        action="store_true",
-        help="Also write natural text to markdown files preserving the folder structure of the input pdfs",
-    )
-    parser.add_argument(
-        "--target_longest_image_dim",
-        type=int,
-        help="Dimension on longest side to use for rendering the pdf pages",
-        default=1288,
-    )
-    parser.add_argument(
-        "--target_anchor_text_len",
-        type=int,
-        help="Maximum amount of anchor text to use (characters), not used for new models",
-        default=-1,
-    )
-    parser.add_argument(
-        "--guided_decoding",
-        action="store_true",
-        help="Enable guided decoding for model YAML type outputs",
-    )
-    parser.add_argument(
-        "--disk_logging",
-        type=str,
-        nargs="?",
-        const="olmocr-pipeline-debug.log",
-        default=None,
-        help="Enable writing logs to disk, optionally specify filename (default: olmocr-pipeline-debug.log)",
-    )
+    pages_per_group_val = pages_per_group
+    if pages_per_group_val is None:
+        pages_per_group_val = 50 if api_key is not None else 500
 
-    server_group = parser.add_argument_group(
-        "Server arguments, to specify where your VLLM inference engine is running"
+    config = OcrConfig(
+        workspace=workspace,
+        pdfs=pdfs,
+        model=model,
+        pages_per_group=pages_per_group_val,
+        max_page_retries=max_page_retries,
+        max_page_error_rate=max_page_error_rate,
+        workers=workers,
+        max_concurrent_requests=max_concurrent_requests,
+        max_server_ready_timeout=max_server_ready_timeout,
+        apply_filter=apply_filter,
+        markdown=markdown,
+        target_longest_image_dim=target_longest_image_dim,
+        target_anchor_text_len=target_anchor_text_len,
+        guided_decoding=guided_decoding,
+        disk_logging=disk_logging,
+        server=server,
+        api_key=api_key,
+        gpu_memory_utilization=gpu_memory_utilization,
+        max_model_len=max_model_len,
+        tensor_parallel_size=tensor_parallel_size,
+        data_parallel_size=data_parallel_size,
+        port=port,
     )
-    server_group.add_argument(
-        "--server",
-        type=str,
-        help="URL of external vLLM (or other compatible provider) server (e.g., http://hostname:port/v1). If provided, skips spawning local vLLM instance",
-    )
-    server_group.add_argument(
-        "--api_key",
-        type=str,
-        default=None,
-        help="API key for authenticated remote servers (e.g., DeepInfra)",
-    )
-
-    vllm_group = parser.add_argument_group(
-        "VLLM arguments",
-        "These arguments are passed to vLLM. Any unrecognized arguments are also automatically forwarded to vLLM.",
-    )
-    vllm_group.add_argument(
-        "--gpu-memory-utilization",
-        type=float,
-        help="Fraction of VRAM vLLM may pre-allocate for KV-cache "
-        "(passed through to vllm serve).",
-    )
-    vllm_group.add_argument(
-        "--max_model_len",
-        type=int,
-        default=16384,
-        help="Upper bound (tokens) vLLM will allocate KV-cache for, lower if VLLM won't start",
-    )
-    vllm_group.add_argument(
-        "--tensor-parallel-size",
-        "-tp",
-        type=int,
-        default=1,
-        help="Tensor parallel size for vLLM",
-    )
-    vllm_group.add_argument(
-        "--data-parallel-size",
-        "-dp",
-        type=int,
-        default=1,
-        help="Data parallel size for vLLM",
-    )
-    vllm_group.add_argument(
-        "--port", type=int, default=30024, help="Port to use for the VLLM server"
-    )
-
-    args, unknown_args = parser.parse_known_args()
 
     # Set up file logging if enabled
-    if args.disk_logging:
-        file_handler = logging.FileHandler(args.disk_logging, mode="a")
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(
-            logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    if config.disk_logging:
+        _loguru_logger.add(
+            config.disk_logging,
+            format=_LOG_FMT,
+            level="DEBUG",
+            mode="a",
         )
-        logger.addHandler(file_handler)
-        server_logger.addHandler(file_handler)
 
     logger.info(
         "If you run out of GPU memory during start-up or get 'KV cache is larger than available memory' errors, retry with lower values, e.g. --gpu_memory_utilization 0.80  --max_model_len 16384"
     )
 
-    use_internal_server = not args.server
+    use_internal_server = not config.server
     global max_concurrent_requests_limit
 
     max_concurrent_requests_limit = asyncio.BoundedSemaphore(
-        args.max_concurrent_requests
+        config.max_concurrent_requests
     )
-
-    # If you specify an API key (remote provider), use smaller group size
-    if not hasattr(args, "pages_per_group"):
-        args.pages_per_group = 50 if args.api_key is not None else 500
 
     # We need poppler to load the initial pdfs, even if we are not processing them here
     check_poppler_version()
 
     # Create work queue (local only)
-    work_queue = WorkQueue(LocalBackend(args.workspace))
+    work_queue = WorkQueue(LocalBackend(config.workspace))
 
-    if args.pdfs:
+    if config.pdfs:
         logger.info("Got --pdfs argument, going to add to the work queue")
         pdf_work_paths = set()
         tarball_paths = set()
 
-        for pdf_path in args.pdfs:
+        for pdf_path in config.pdfs:
             if os.path.exists(pdf_path):
                 # Check if this is a tar.gz file (local)
                 if is_tarball_path(pdf_path):
@@ -1363,7 +1310,7 @@ async def main():
                 )
                 avg_pages_per_pdf = 10  # Default to 10 pages per PDF if sampling fails
 
-            items_per_group = max(1, int(args.pages_per_group / avg_pages_per_pdf))
+            items_per_group = max(1, int(config.pages_per_group / avg_pages_per_pdf))
             logger.info(
                 f"Calculated items_per_group: {items_per_group} based on average pages per PDF: {avg_pages_per_pdf:.2f}"
             )
@@ -1373,7 +1320,7 @@ async def main():
 
         # Add tarballs to the queue - each tarball is one work item
         if tarball_paths:
-            await work_queue.populate_queue(tarball_paths, 1)
+            await work_queue.populate_queue(list(tarball_paths), 1)
 
     # If you get this far, then you are doing inference and need a GPU
     # check_sglang_version()
@@ -1384,12 +1331,12 @@ async def main():
 
     # Download the model before you do anything else
     if use_internal_server:
-        model_name_or_path = await download_model(args.model)
-        args.server = f"http://localhost:{args.port}/v1"
-        args.model = "olmocr"  # Internal server always uses this name for the model, for supporting weird local model paths
-        logger.info(f"Using internal server at {args.server}")
+        model_name_or_path = await download_model(config.model)
+        config.server = f"http://localhost:{config.port}/v1"
+        config.model = "olmocr"  # Internal server always uses this name for the model, for supporting weird local model paths
+        logger.info(f"Using internal server at {config.server}")
     else:
-        logger.info(f"Using external server at {args.server}")
+        logger.info(f"Using external server at {config.server}")
         model_name_or_path = None
 
     # Initialize the work queue
@@ -1401,19 +1348,19 @@ async def main():
 
     # Start local vLLM instance if not using external one
     vllm_server = None
-    if use_internal_server:
+    if use_internal_server and model_name_or_path is not None:
         vllm_server = asyncio.create_task(
-            vllm_server_host(model_name_or_path, args, unknown_args)
+            vllm_server_host(model_name_or_path, config, unknown_args)
         )
 
-    await vllm_server_ready(args)
+    await vllm_server_ready(config)
 
     metrics_task = asyncio.create_task(metrics_reporter(work_queue))
 
     # Create worker tasks to process the queue concurrently.
     worker_tasks = []
-    for i in range(args.workers):
-        task = asyncio.create_task(worker(args, work_queue, worker_id=i))
+    for i in range(config.workers):
+        task = asyncio.create_task(worker(config, work_queue, worker_id=i))
         worker_tasks.append(task)
 
     # Wait for all worker tasks to finish
@@ -1468,11 +1415,11 @@ async def main():
     logger.info("Pages finished by attempt number:")
     total_finished = sum(
         total_metrics.get(f"finished_on_attempt_{i}", 0)
-        for i in range(args.max_page_retries)
+        for i in range(config.max_page_retries)
     )
     cumulative = 0
 
-    for i in range(args.max_page_retries):
+    for i in range(config.max_page_retries):
         if f"finished_on_attempt_{i}" in total_metrics:
             count = total_metrics[f"finished_on_attempt_{i}"]
             cumulative += count
@@ -1504,7 +1451,3 @@ async def main():
 
     logger.info("=" * 80)
     logger.info("Work done")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
