@@ -1,0 +1,66 @@
+# Mirrors .gitignore so the build context respects the same exclusions
+
+.git/
+.github/
+
+# Python artefacts
+__pycache__/
+*.py[codz]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments / uv cache
+.venv/
+.uv/
+env/
+venv/
+ENV/
+
+# Test / coverage
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+
+# Type checkers / linters
+.mypy_cache/
+.dmypy.json
+.pyre/
+.pytype/
+.ruff_cache/
+cython_debug/
+
+# Env / secrets
+.env
+.envrc
+.env.*
+
+# Editor / IDE
+.vscode/
+.idea/
+.cursorignore
+.cursorindexingignore
+.spyderproject
+.spyproject
+.ropeproject
+
+# Project-specific large data dirs
+localworkspace/
+sec_data/
+
+# Misc
+*.log
+benchmark.yaml
+.abstra/
+.pixi/
+__marimo__/
+.ipynb_checkpoints/

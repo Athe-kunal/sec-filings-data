@@ -22,6 +22,37 @@ email = settings.sec_api_email
 server = settings.olmocr_server
 ```
 
+## Docker
+
+### Build
+
+```bash
+docker build -t sec-filings-md .
+```
+
+### Run
+
+```bash
+docker run --gpus device=${CUDA_VISIBLE_DEVICES:-3} \
+  -e SEC_API_ORGANIZATION="Your-Organization" \
+  -e SEC_API_EMAIL="your-email@example.com" \
+  -e OLMOCR_SERVER="http://host.docker.internal:8000/v1" \
+  -e CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-3} \
+  -v ./sec_data:/app/sec_data \
+  -v ./localworkspace:/app/localworkspace \
+  -p 8081:8081 \
+  sec-filings-md
+```
+
+The two volumes persist data across container restarts:
+
+| Volume | Container path | Purpose |
+|--------|---------------|---------|
+| `sec_data` | `/app/sec_data` | Downloaded SEC filing PDFs |
+| `localworkspace` | `/app/localworkspace` | OCR workspace and output markdown |
+
+Override the workspace path at runtime with `-e OLMOCR_WORKSPACE=/custom/path`.
+
 ## Installation
 
 ```bash
