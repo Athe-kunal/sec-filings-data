@@ -9,4 +9,6 @@ dependencies = [
     "olmocr>=0.4.27",
     "ratelimit>=2.2.1",
     "playwright>=1.49",
+    "vllm>=0.17.1",
+    "yfinance>=1.2.0",
 ]

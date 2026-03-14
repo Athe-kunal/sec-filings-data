@@ -148,4 +148,39 @@ async def sec_main(
 
 
 if __name__ == "__main__":
-    data = asyncio.run(sec_main(ticker="NVDA", year="2025"))
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Fetch SEC filings and save as PDFs")
+    parser.add_argument("--ticker", type=str, required=True, help="Stock ticker symbol")
+    parser.add_argument("--year", type=str, required=True, help="Filing year")
+    parser.add_argument(
+        "--filing-types",
+        nargs="+",
+        default=["10-K", "10-Q"],
+        help="Filing types to fetch",
+    )
+    parser.add_argument(
+        "--include-amends", type=bool, default=True, help="Include amended filings"
+    )
+    parser.add_argument(
+        "--company",
+        type=str,
+        default="IU Bloomington",
+        help="Company name",
+    )
+    parser.add_argument(
+        "--email", type=str, default="athecolab@gmail.com", help="Contact email"
+    )
+
+    args = parser.parse_args()
+
+    data = asyncio.run(
+        sec_main(
+            ticker=args.ticker,
+            year=args.year,
+            filing_types=args.filing_types,
+            include_amends=args.include_amends,
+            company=args.company,
+            email=args.email,
+        )
+    )

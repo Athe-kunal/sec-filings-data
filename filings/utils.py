@@ -6,12 +6,31 @@ from pathlib import Path
 import os
 from loguru import logger
 from ratelimit import limits, sleep_and_retry
+import yfinance as yf
 from playwright.async_api import async_playwright, Browser
 
 SEC_ARCHIVE_URL: Final[str] = "https://www.sec.gov/Archives/edgar/data"
 SEC_VIEWER_URL: Final[str] = "https://www.sec.gov/ix?doc=/Archives/edgar/data"
 SEC_SEARCH_URL: Final[str] = "http://www.sec.gov/cgi-bin/browse-edgar"
 SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions"
+
+
+def company_to_ticker(name: str) -> str | None:
+    """Resolve a company name to its stock ticker symbol via Yahoo Finance.
+
+    Args:
+        name: The company name to look up (e.g. ``"Apple Inc"``).
+
+    Returns:
+        The ticker symbol string (e.g. ``"AAPL"``), or ``None`` if no match
+        is found.
+    """
+    results = yf.Search(name).quotes
+
+    if not results:
+        return None
+
+    return results[0]["symbol"]
 
 
 def _drop_dashes(accession_number: Union[str, int]) -> str:
@@ -195,7 +214,9 @@ async def _render_pdf_with_browser(
                 downloaded_filing.html_content,
                 wait_until="networkidle",
             )
-            await page.pdf(path=str(output_path), format="Letter", print_background=True)
+            await page.pdf(
+                path=str(output_path), format="Letter", print_background=True
+            )
             logger.info(f"Saved PDF: {output_path}")
             return output_path
         except Exception as exc:

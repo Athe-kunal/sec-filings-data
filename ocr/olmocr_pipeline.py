@@ -1,5 +1,5 @@
-from rich.themes import DEFAULT
-import argparse
+import pathlib
+import glob
 import asyncio
 import atexit
 import base64
@@ -1148,8 +1148,8 @@ async def metrics_reporter(work_queue):
 
 
 async def run_olmo_ocr(
+    pdf_dir: str,
     workspace: str = DEFAULT_WORKSPACE,
-    pdfs: list[str] | None = None,
     model: str = DEFAULT_MODEL,
     pages_per_group: int | None = None,
     max_page_retries: int = 8,
@@ -1158,7 +1158,7 @@ async def run_olmo_ocr(
     max_concurrent_requests: int = 1600,
     max_server_ready_timeout: int = 600,
     apply_filter: bool = False,
-    markdown: bool = False,
+    markdown: bool = True,
     target_longest_image_dim: int = 1288,
     target_anchor_text_len: int = -1,
     guided_decoding: bool = False,
@@ -1173,6 +1173,8 @@ async def run_olmo_ocr(
     unknown_args: list[str] | None = None,
 ):
     """Run the OCR pipeline with the given options. All parameters have the same defaults as the CLI."""
+    pdfs = glob.glob(str(pathlib.Path(pdf_dir) / "*.pdf"))
+
     if unknown_args is None:
         unknown_args = []
 
@@ -1451,3 +1453,21 @@ async def run_olmo_ocr(
 
     logger.info("=" * 80)
     logger.info("Work done")
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run OLM OCR Pipeline")
+
+    parser.add_argument(
+        "--pdf-dir",
+        type=str,
+        default="sec_data/AMZN-2025",
+        help="Directory containing PDFs to OCR",
+    )
+    args = parser.parse_args()
+
+    asyncio.run(run_olmo_ocr(pdf_dir=args.pdf_dir))
