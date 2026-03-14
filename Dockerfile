@@ -1,6 +1,5 @@
 # syntax=docker/dockerfile:1.7
 
-# Use CUDA runtime (not devel) to significantly reduce base image size.
 FROM nvidia/cuda:12.6.3-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -12,9 +11,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # Keep system packages minimal and avoid recommended extras.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
     ca-certificates \
     curl \
-    make \
     poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
@@ -24,13 +23,10 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 
-# Install browser binaries by default for SEC scraping workflows.
-ARG INSTALL_PLAYWRIGHT_BROWSER=1
+# Install only runtime dependencies into a dedicated venv.
+RUN uv sync --frozen --no-dev
 
-# Install only runtime dependencies into a dedicated venv and aggressively clean caches.
-RUN uv sync --frozen --no-dev \
-    && if [ "$INSTALL_PLAYWRIGHT_BROWSER" = "1" ]; then uv run playwright install chromium; fi \
-    && rm -rf /root/.cache /tmp/*
+RUN uv run playwright install chromium --with-deps
 
 COPY . .
 
