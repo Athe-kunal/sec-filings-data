@@ -5,12 +5,13 @@ import pickle
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 import faiss
-from typing import TYPE_CHECKING
-from settings import olmocr_settings
 import numpy as np
 from openai import OpenAI
+import markdownify
 
+from settings import olmocr_settings
 from filings.sec_data import load_sec_results
 from ocr.olmocr_pipeline import get_markdown_path, run_olmo_ocr
 from dataloader.pipeline import ensure_sec_data
@@ -30,8 +31,12 @@ _SECTION_TITLE_RE = re.compile(
 _MIN_CHUNK_CHARS = 2048
 _EMBED_BATCH_SIZE = 2048
 
-# Key type: (ticker, year, filing_type, filing_date)
-IndexKey = tuple[str, str, str, str]
+
+class IndexKey(NamedTuple):
+    ticker: str
+    year: str
+    filing_type: str
+    filing_date: str
 
 
 # ---------------------------------------------------------------------------
@@ -133,11 +138,6 @@ def chunk_markdown(text: str) -> list[Chunk]:
     return chunks
 
 
-# ---------------------------------------------------------------------------
-# Embedding
-# ---------------------------------------------------------------------------
-
-
 def embed_chunks(chunks: list[Chunk], client: "OpenAI", model: str) -> np.ndarray:
     """Embed *chunks* via an OpenAI-compatible endpoint.
 
@@ -158,11 +158,6 @@ def embed_chunks(chunks: list[Chunk], client: "OpenAI", model: str) -> np.ndarra
     norms = np.linalg.norm(matrix, axis=1, keepdims=True)
     norms = np.where(norms == 0, 1.0, norms)
     return matrix / norms
-
-
-# ---------------------------------------------------------------------------
-# GPU helpers (graceful fallback when faiss-gpu-cu12 differs from conda API)
-# ---------------------------------------------------------------------------
 
 
 def _try_move_to_gpu(cpu_index: "faiss.Index", device: int = 0) -> "faiss.Index":
@@ -200,11 +195,6 @@ def _index_gpu_to_cpu(gpu_index: "faiss.Index") -> "faiss.Index":
         return gpu_index.quantizer  # type: ignore[attr-defined]
     _log.warning("Cannot convert GPU index to CPU; returning as-is.")
     return gpu_index
-
-
-# ---------------------------------------------------------------------------
-# FaissVectorIndex
-# ---------------------------------------------------------------------------
 
 
 class FaissVectorIndex:
@@ -316,11 +306,21 @@ class FaissVectorIndex:
         k = min(top_k, len(self.chunks))
         scores, indices = self._index.search(q_vec, k)
 
-        return [
-            (self.chunks[idx], float(score))
-            for score, idx in zip(scores[0], indices[0])
-            if idx != -1
-        ]
+        results = []
+        for score, idx in zip(scores[0], indices[0]):
+            if idx == -1:
+                continue
+            chunk = self.chunks[idx]
+            if chunk.chunk_type == "table":
+                chunk = Chunk(
+                    text=markdownify.markdownify(chunk.text, heading_style="ATX"),
+                    chunk_type=chunk.chunk_type,
+                    page_num=chunk.page_num,
+                    section_title=chunk.section_title,
+                    index=chunk.index,
+                )
+            results.append((chunk, float(score)))
+        return results
 
     def __len__(self) -> int:
         return len(self.chunks)
@@ -330,11 +330,6 @@ class FaissVectorIndex:
             f"FaissVectorIndex(chunks={len(self.chunks)}, "
             f"dim={self.embeddings.shape[1]}, model={self._model!r})"
         )
-
-
-# ---------------------------------------------------------------------------
-# FaissVectorStore
-# ---------------------------------------------------------------------------
 
 
 class FaissVectorStore:
@@ -380,10 +375,6 @@ class FaissVectorStore:
         )
         self._cache: dict[IndexKey, FaissVectorIndex] = {}
 
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
-
     def _key_path(self, key: IndexKey) -> Path:
         ticker, year, filing_type, filing_date = key
         return self._index_dir / ticker / year / filing_type / filing_date
@@ -409,10 +400,6 @@ class FaissVectorStore:
         self._cache[key] = idx
         return idx
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def list_indexes(self) -> list[IndexKey]:
         """Return all ``(ticker, year, filing_type, filing_date)`` keys on disk."""
         if not self._index_dir.exists():
@@ -422,7 +409,7 @@ class FaissVectorStore:
             parts = f.relative_to(self._index_dir).parts
             if len(parts) == 5:
                 ticker, year, filing_type, filing_date, _ = parts
-                keys.append((ticker, year, filing_type, filing_date))
+                keys.append(IndexKey(ticker, year, filing_type, filing_date))
         return keys
 
     @staticmethod
@@ -483,7 +470,7 @@ class FaissVectorStore:
         if filing_date is None:
             filing_date = self._resolve_filing_date(ticker, year, filing_type)
 
-        key: IndexKey = (ticker, year, filing_type, filing_date)
+        key = IndexKey(ticker, year, filing_type, filing_date)
         dest = self._key_path(key)
 
         if (dest / "index.faiss").exists() and not force:
@@ -603,12 +590,12 @@ class FaissVectorStore:
         list[tuple[Chunk, float]]
             ``(chunk, cosine_score)`` pairs in descending score order.
         """
-        key: IndexKey = (ticker, year, filing_type, filing_date)
+        key = IndexKey(ticker, year, filing_type, filing_date)
         return self._load_cached(key).search(query, top_k=top_k)
 
     def evict(self, ticker: str, year: str, filing_type: str, filing_date: str) -> None:
         """Drop a loaded index from the memory cache to free GPU/CPU RAM."""
-        self._cache.pop((ticker, year, filing_type, filing_date), None)
+        self._cache.pop(IndexKey(ticker, year, filing_type, filing_date), None)
 
     def __repr__(self) -> str:  # pragma: no cover
         return (
