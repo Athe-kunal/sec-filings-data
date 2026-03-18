@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple, Sequence
 import faiss
+
 from settings import olmocr_settings
 import numpy as np
 from openai import OpenAI
@@ -48,7 +49,8 @@ class Chunk:
         return (
             f"Chunk(index={self.index}, type={self.chunk_type!r}, "
             f"page={self.page_num}, section={self.section_title!r}, "
-            f"text={preview!r}...)"
+            f"text={preview!r}...) "
+            f"len(text)={len(preview)}"
         )
 
 
