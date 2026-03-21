@@ -210,3 +210,67 @@ def chunk_markdown(text: str) -> list[Chunk]:
 
     flush_buffer()
     return chunks
+
+
+def chunk_text_with_overlap(
+    text: str,
+    chunk_size: int = 2048,
+    overlap: int = 256,
+) -> list[str]:
+    """Split text into overlapping character windows."""
+    cleaned = text.strip()
+    if not cleaned:
+        return []
+
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+    if overlap < 0:
+        raise ValueError("overlap must be non-negative")
+    if overlap >= chunk_size:
+        raise ValueError("overlap must be smaller than chunk_size")
+
+    windows: list[str] = []
+    step = chunk_size - overlap
+    for start in range(0, len(cleaned), step):
+        window = cleaned[start : start + chunk_size]
+        if not window:
+            break
+        windows.append(window)
+        if start + chunk_size >= len(cleaned):
+            break
+    return windows
+
+
+def chunk_transcript_rows(
+    rows: list[tuple[str, str]],
+    chunk_size: int = 2048,
+    overlap: int = 256,
+) -> list[Chunk]:
+    """Create transcript chunks with speaker-prefixed overlapping text."""
+    chunks: list[Chunk] = []
+    index = 0
+
+    for speaker, text in rows:
+        clean_speaker = speaker.strip()
+        clean_text = text.strip()
+        if not clean_text:
+            continue
+
+        for part in chunk_text_with_overlap(
+            clean_text, chunk_size=chunk_size, overlap=overlap
+        ):
+            chunk_text = (
+                f"Speaker: {clean_speaker}\nText: {part}" if clean_speaker else part
+            )
+            chunks.append(
+                Chunk(
+                    text=chunk_text,
+                    chunk_type="text",
+                    page_num=None,
+                    section_title=clean_speaker or None,
+                    index=index,
+                )
+            )
+            index += 1
+
+    return chunks
