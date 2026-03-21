@@ -114,18 +114,16 @@ def delete_worker_locks():
     }
 
 
-class VectorEmbedRequest(BaseModel):
-    """Build ChromaDB vectors from already-OCR'd markdown files.
+class SecFilingsEmbedRequest(BaseModel):
+    """Build ChromaDB vectors from OCR markdown under the workspace.
 
-    ``markdown_dir`` should be the folder that contains ``{filing_type}.md``
-    files (e.g. ``localworkspace/markdown/sec_data/AMZN-2025``).  All ``.md``
-    files found in that directory are indexed; the filing type is derived from
-    each file's stem (e.g. ``10-Q1.md`` → ``"10-Q1"``).
+    Reads all ``*.md`` in
+    ``{olmocr_workspace}/markdown/{sec_data_dir}/{ticker}-{year}/``.
+    Filing type is each file's stem (e.g. ``10-Q1.md`` → ``"10-Q1"``).
     """
 
     ticker: str
     year: str
-    markdown_dir: str
     force: bool = False
 
 
@@ -142,36 +140,20 @@ class TranscriptSearchRequest(BaseModel):
     top_k: int = 5
 
 
-@app.post("/vector_store/embed")
-def vector_store_embed(request: VectorEmbedRequest):
-    """Build and persist ChromaDB vectors from all markdown files in a directory.
-
-    Discovers every ``*.md`` file in ``markdown_dir`` and calls
-    ``from_markdown_sec_filings()``.  The filing type is extracted from each file stem.
+@app.post("/vector_store/embed_sec_filings")
+def embed_sec_filings(request: SecFilingsEmbedRequest):
+    """Build and persist ChromaDB vectors from workspace SEC markdown for ticker/year.
 
     Returns the list of index keys that were built or already existed.
     """
-    md_dir = Path(request.markdown_dir)
-    if not md_dir.exists():
-        raise HTTPException(
-            status_code=400,
-            detail=f"markdown_dir does not exist: {md_dir}",
-        )
-
-    md_paths: list[Path] = sorted(md_dir.glob("*.md"))
-    if not md_paths:
-        raise HTTPException(
-            status_code=400,
-            detail=f"No .md files found in {md_dir}",
-        )
-
     try:
         keys = vector_index.from_markdown_sec_filings(
             ticker=request.ticker,
             year=request.year,
-            markdown_paths=md_paths,
             force=request.force,
         )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -184,7 +166,7 @@ def vector_store_embed(request: VectorEmbedRequest):
 
 
 @app.post("/vector_store/embed_transcripts")
-def vector_store_embed_transcripts(request: TranscriptEmbedRequest):
+def embed_transcripts(request: TranscriptEmbedRequest):
     try:
         keys = vector_index.from_earnings_transcript_jsonl(
             request.ticker,
@@ -203,21 +185,21 @@ def vector_store_embed_transcripts(request: TranscriptEmbedRequest):
     }
 
 
-class ListFilingsRequest(BaseModel):
+class SecFilingsListRequest(BaseModel):
     ticker: str
     year: str
 
 
-@app.post("/vector_store/list_filings")
-def vector_store_list_filings(request: ListFilingsRequest):
-    """List all ingested filings for a ticker and year.
+@app.post("/vector_store/list_sec_filings")
+def list_sec_filings(request: SecFilingsListRequest):
+    """List ingested SEC filing types for a ticker and year.
 
     Returns each filing's type and its SEC submission date.
     """
     return vector_index.list_filings(request.ticker, request.year)
 
 
-class VectorSearchRequest(BaseModel):
+class SecFilingsSearchRequest(BaseModel):
     ticker: str
     year: str
     filing_type: str
@@ -235,14 +217,14 @@ class ChunkResult(BaseModel):
     filing_type: str | None = None
 
 
-@app.post("/vector_store/search", response_model=list[ChunkResult])
-def vector_store_search(request: VectorSearchRequest):
-    """Semantic search over a single filing's ChromaDB vectors.
+@app.post("/vector_store/search_sec_filings", response_model=list[ChunkResult])
+def search_sec_filings(request: SecFilingsSearchRequest):
+    """Semantic search over one SEC filing (10-K, 10-Q, …) in Chroma.
 
-    The index must have been built first via ``/vector_store/embed`` or
-    ``/sec_main`` + ``/run_olmo_ocr`` + ``/vector_store/embed``.
+    Build the index first via ``/vector_store/embed_sec_filings`` after
+    ``/sec_main`` + ``/run_olmo_ocr``.
 
-    Returns the top-k most relevant chunks with their cosine similarity scores.
+    Returns the top-k chunks by cosine similarity to the query embedding.
     """
     try:
         results = vector_index.search(
@@ -269,7 +251,7 @@ def vector_store_search(request: VectorSearchRequest):
 
 
 @app.post("/vector_store/search_transcripts", response_model=list[ChunkResult])
-def vector_store_search_transcripts(request: TranscriptSearchRequest):
+def search_transcripts(request: TranscriptSearchRequest):
     year_s = str(request.year).strip()
     resolved = vector_index.resolve_transcript_quarters(request.ticker, year_s)
     if not resolved:

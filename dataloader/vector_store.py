@@ -18,6 +18,7 @@ from settings import sec_settings
 
 _log = logging.getLogger(__name__)
 _EMBED_BATCH_SIZE = 2048
+_CHROMA_MISSING_PAGE_NUM = -1
 
 
 class IndexKey(NamedTuple):
@@ -76,10 +77,12 @@ class ChromaVectorStore:
 
     @staticmethod
     def _parse_chunk_metadata(meta: dict) -> Chunk:
+        pn = meta.get("page_num")
+        page_num = None if pn == _CHROMA_MISSING_PAGE_NUM else pn
         return Chunk(
             text=str(meta.get("text", "")),
             chunk_type=str(meta.get("chunk_type", "text")),
-            page_num=meta.get("page_num"),
+            page_num=page_num,
             section_title=meta.get("section_title"),
             index=int(meta.get("chunk_index", -1)),
         )
@@ -124,6 +127,19 @@ class ChromaVectorStore:
             candidates.extend(sorted(base.glob(f"**/{year_s}/Q*.jsonl")))
 
         return candidates
+
+    @staticmethod
+    def _resolve_sec_markdown_paths(ticker: str, year: str) -> list[Path]:
+        year_s = str(year).strip()
+        md_dir = (
+            Path(sec_settings.olmocr_workspace)
+            / "markdown"
+            / Path(sec_settings.sec_data_dir)
+            / f"{ticker}-{year_s}"
+        )
+        if not md_dir.is_dir():
+            return []
+        return sorted(md_dir.glob("*.md"))
 
     def _embed_for_upsert(self, chunks: list[Chunk]) -> _EmbeddedChunks:
         if not chunks:
@@ -181,7 +197,9 @@ class ChromaVectorStore:
                     "chunk_index": chunk.index,
                     "chunk_type": chunk.chunk_type,
                     "section_title": chunk.section_title or "",
-                    "page_num": chunk.page_num,
+                    "page_num": chunk.page_num
+                    if chunk.page_num is not None
+                    else _CHROMA_MISSING_PAGE_NUM,
                     "text": chunk.text,
                 }
             )
@@ -197,12 +215,24 @@ class ChromaVectorStore:
         self,
         ticker: str,
         year: str,
-        markdown_paths: Sequence[Path],
         force: bool = False,
     ) -> list[IndexKey]:
+        """Index every ``*.md`` under workspace markdown for this ticker/year.
+
+        Path: ``{olmocr_workspace}/markdown/{sec_data_dir}/{ticker}-{year}/``
+        (same layout as the olmOCR markdown writer).
+        """
+        resolved_paths = self._resolve_sec_markdown_paths(ticker, year)
+        if not resolved_paths:
+            raise FileNotFoundError(
+                f"No .md files for ticker={ticker}, year={year} under "
+                f"{Path(sec_settings.olmocr_workspace) / 'markdown' / sec_settings.sec_data_dir} "
+                f"(expected a folder named like {ticker!r}-{year!r})."
+            )
+
         ingested: list[IndexKey] = []
 
-        for raw_path in markdown_paths:
+        for raw_path in resolved_paths:
             md_path = Path(raw_path)
             filing_type = md_path.stem
             key = IndexKey(ticker=ticker, year=str(year), filing_type=filing_type)
