@@ -130,24 +130,6 @@ async def run_olmo_ocr_tool(pdf_dir: str) -> dict[str, str]:
 
 
 @mcp.tool()
-def delete_worker_locks_tool() -> dict[str, str]:
-    """Delete olmOCR worker lock files in the configured workspace."""
-    worker_locks_dir = Path(sec_settings.olmocr_workspace) / "worker_locks"
-    existed = worker_locks_dir.exists()
-
-    if existed and not worker_locks_dir.is_dir():
-        raise ValueError(f"Worker locks path is not a directory: {worker_locks_dir}")
-
-    if existed:
-        shutil.rmtree(worker_locks_dir)
-
-    return {
-        "status": "deleted" if existed else "not_found",
-        "worker_locks_dir": str(worker_locks_dir),
-    }
-
-
-@mcp.tool()
 def embed_sec_filings_tool(ticker: str, year: str, force: bool = False) -> dict:
     """Build vector indexes for OCR markdown SEC filings.
 
