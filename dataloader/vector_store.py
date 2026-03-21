@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import NamedTuple, Sequence
 import faiss
 
-from settings import olmocr_settings
+from settings import sec_settings
 import numpy as np
 from openai import OpenAI
 
@@ -20,10 +20,12 @@ from dataloader.chunker import chunk_markdown, Chunk
 _log = logging.getLogger(__name__)
 _EMBED_BATCH_SIZE = 2048
 
+
 class IndexKey(NamedTuple):
     ticker: str
     year: str
     filing_type: str
+
 
 @dataclass
 class _FilingData:
@@ -127,12 +129,10 @@ class FaissVectorIndex:
         embedding_model: str | None = None,
         use_gpu: bool | None = None,
     ) -> None:
-        self._index_dir = Path(index_dir or olmocr_settings.faiss_index_dir)
-        self._embedding_server = embedding_server or olmocr_settings.embedding_server
-        self._embedding_model = embedding_model or olmocr_settings.embedding_model
-        self._use_gpu = (
-            use_gpu if use_gpu is not None else olmocr_settings.faiss_use_gpu
-        )
+        self._index_dir = Path(index_dir or sec_settings.faiss_index_dir)
+        self._embedding_server = embedding_server or sec_settings.embedding_server
+        self._embedding_model = embedding_model or sec_settings.embedding_model
+        self._use_gpu = use_gpu if use_gpu is not None else sec_settings.faiss_use_gpu
         self._cache: dict[IndexKey, _FilingData] = {}
 
     def _key_path(self, key: IndexKey) -> Path:
@@ -303,7 +303,7 @@ class FaissVectorIndex:
         list[IndexKey]
             Keys for every index that was built/found.
         """
-        workspace_str = str(workspace or olmocr_settings.olmocr_workspace)
+        workspace_str = str(workspace or sec_settings.olmocr_workspace)
 
         sec_results, _ = await ensure_sec_data(
             ticker=ticker,

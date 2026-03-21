@@ -56,7 +56,9 @@ def _extract_section(para: str, current_section: str | None) -> str | None:
     return current_section
 
 
-def _split_on_page_tags(text: str, current_page: int | None) -> list[tuple[str, int | None]]:
+def _split_on_page_tags(
+    text: str, current_page: int | None
+) -> list[tuple[str, int | None]]:
     """Split a text block into (content, page_num) segments at every <PAGE-NUM-X> tag.
 
     Each segment inherits the page number of the most recently seen tag.
@@ -195,7 +197,9 @@ def chunk_markdown(text: str) -> list[Chunk]:
             flush_buffer()
             chunks.append(
                 _make_chunk(
-                    text=markdownify.markdownify(tables[part_idx].strip(), heading_style="ATX"),
+                    text=markdownify.markdownify(
+                        tables[part_idx].strip(), heading_style="ATX"
+                    ),
                     chunk_type="table",
                     page_num=current_page,
                     section_title=current_section,

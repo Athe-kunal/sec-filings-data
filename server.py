@@ -9,7 +9,7 @@ from dataloader.vector_store import FaissVectorIndex
 from filings.utils import company_to_ticker
 from filings.sec_data import sec_main
 from ocr.olmocr_pipeline import run_olmo_ocr
-from settings import olmocr_settings
+from settings import sec_settings
 
 vector_index: FaissVectorIndex
 
@@ -87,7 +87,7 @@ async def run_olmo_ocr_endpoint(request: RunOlmoOcrRequest):
 @app.delete("/worker_locks")
 def delete_worker_locks():
     """Delete the configured olmOCR worker lock directory."""
-    worker_locks_dir = Path(olmocr_settings.olmocr_workspace) / "worker_locks"
+    worker_locks_dir = Path(sec_settings.olmocr_workspace) / "worker_locks"
     existed = worker_locks_dir.exists()
 
     if existed and not worker_locks_dir.is_dir():
