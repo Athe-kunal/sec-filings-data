@@ -11,7 +11,7 @@ import numpy as np
 from chromadb.api.models.Collection import Collection
 from openai import OpenAI
 
-from dataloader.chunker import Chunk, chunk_markdown, chunk_transcript_rows
+from dataloader.text_splitter import Chunk, chunk_markdown, chunk_transcript_rows
 from earnings_transcripts.transcripts import Transcript
 from filings.sec_data import load_sec_results
 from settings import sec_settings

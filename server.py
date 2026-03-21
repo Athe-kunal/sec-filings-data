@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from dataloader.chunker import Chunk
+from dataloader.text_splitter import Chunk
 from dataloader.vector_store import ChromaVectorStore
 from earnings_transcripts.transcripts import get_transcripts_for_year_async
 from filings.utils import company_to_ticker
