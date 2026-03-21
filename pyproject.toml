@@ -9,24 +9,26 @@ dependencies = [
     "pydantic-settings>=2.6.0",
     "uvicorn[standard]>=0.32.0",
     "loguru>=0.7.3",
-    "olmocr>=0.4.27",
     "ratelimit>=2.2.1",
     "playwright>=1.49",
-    "vllm>=0.17.1",
     "yfinance>=1.2.0",
-    "guidellm[recommended]>=0.5.4",
-    "nvitop>=1.6.2",
-    "chromadb>=1.0.20",
     "numpy>=1.26",
-    "openai>=1.0",
-    "langchain-text-splitters>=0.3.0",
-    "markdownify>=0.13.1",
 ]
 
 [project.scripts]
 finance-data-server = "finance_data.cli:main"
 
 [dependency-groups]
+ocr-md = [
+    "olmocr>=0.4.27",
+    "vllm>=0.17.1",
+    "guidellm[recommended]>=0.5.4",
+    "nvitop>=1.6.2",
+    "chromadb>=1.0.20",
+    "openai>=1.0",
+    "langchain-text-splitters>=0.3.0",
+    "markdownify>=0.13.1",
+]
 mcp = [
     "mcp[cli]>=1.26.0",
 ]

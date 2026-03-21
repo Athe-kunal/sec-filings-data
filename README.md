@@ -105,6 +105,12 @@ uv sync
 playwright install chromium
 ```
 
+Install OCR/markdown + embedding stack dependencies when you need those pipelines:
+
+```bash
+uv sync --group ocr-md
+```
+
 Package install (for publishing/consuming from PyPI):
 
 ```bash
