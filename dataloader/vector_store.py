@@ -15,7 +15,8 @@ from openai import OpenAI
 from filings.sec_data import load_sec_results
 from ocr.olmocr_pipeline import get_markdown_path, run_olmo_ocr
 from dataloader.pipeline import ensure_sec_data
-from dataloader.chunker import chunk_markdown, Chunk
+from dataloader.chunker import Chunk, chunk_markdown, chunk_transcript_rows
+from earnings_transcripts.transcripts import Transcript
 
 _log = logging.getLogger(__name__)
 _EMBED_BATCH_SIZE = 2048
@@ -162,6 +163,36 @@ class FaissVectorIndex:
             filing_date=filing_date,
         )
 
+    @staticmethod
+    def _load_transcript_rows(
+        jsonl_path: Path,
+    ) -> tuple[str | None, list[tuple[str, str]]]:
+        """Load transcript metadata + speaker rows from a transcript JSONL file."""
+        transcript = Transcript.from_file(jsonl_path)
+        rows = [(item.speaker, item.text) for item in transcript.speaker_texts]
+        return transcript.date, rows
+
+    def _resolve_transcript_paths(
+        self,
+        ticker: str,
+        year: str,
+        transcript_paths: Sequence[Path] | None,
+    ) -> list[Path]:
+        if transcript_paths is not None:
+            return [Path(path) for path in transcript_paths]
+
+        base = Path(sec_settings.earnings_transcripts_dir)
+        candidates = [
+            base / f"{ticker}-{year}",
+            base / ticker / year,
+        ]
+
+        for path in candidates:
+            if path.exists():
+                return sorted(path.glob("Q*.jsonl"))
+
+        return []
+
     def _save_filing(self, key: IndexKey, data: _FilingData) -> None:
         path = self._key_path(key)
         path.mkdir(parents=True, exist_ok=True)
@@ -272,6 +303,77 @@ class FaissVectorIndex:
             self._save_filing(key, data)
             self._cache[key] = data
             _log.info("Saved %d chunks to %s", len(data.chunks), dest)
+            ingested.append(key)
+
+        return ingested
+
+    def from_earnings_transcript_jsonl(
+        self,
+        ticker: str,
+        year: str,
+        transcript_paths: Sequence[Path] | None = None,
+        *,
+        force: bool = False,
+        chunk_size: int = 2048,
+        overlap: int = 256,
+    ) -> list[IndexKey]:
+        """Chunk, embed, and persist transcript JSONL files.
+
+        Each transcript file is expected to contain ``speaker_texts`` rows. Rows are
+        transformed into overlapping chunks (default 2048 chars with 256 overlap),
+        each prefixed with the speaker before embedding.
+        """
+        ingested: list[IndexKey] = []
+
+        resolved_paths = self._resolve_transcript_paths(ticker, year, transcript_paths)
+        if not resolved_paths:
+            raise FileNotFoundError(
+                f"No transcript JSONL files found for ticker={ticker}, year={year} "
+                f"under {sec_settings.earnings_transcripts_dir!r}."
+            )
+
+        for raw_path in resolved_paths:
+            tx_path = Path(raw_path)
+            filing_type = tx_path.stem.upper()  # "Q1" from "Q1.jsonl"
+            key = IndexKey(ticker, year, filing_type)
+            dest = self._key_path(key)
+
+            if (dest / "index.faiss").exists() and not force:
+                _log.info(
+                    "Transcript index already exists for %s, skipping. Pass force=True to rebuild.",
+                    key,
+                )
+                ingested.append(key)
+                continue
+
+            transcript_date, transcript_rows = self._load_transcript_rows(tx_path)
+            chunks = chunk_transcript_rows(
+                transcript_rows,
+                chunk_size=chunk_size,
+                overlap=overlap,
+            )
+            if not chunks:
+                raise ValueError(f"No transcript chunks produced from {tx_path}.")
+
+            embeddings = embed_chunks(
+                chunks,
+                self._make_client(),
+                self._embedding_model,
+            )
+            dim = embeddings.shape[1]
+            cpu_index = faiss.IndexFlatIP(dim)
+            cpu_index.add(embeddings)
+            index = _try_move_to_gpu(cpu_index) if self._use_gpu else cpu_index
+
+            data = _FilingData(
+                chunks=chunks,
+                embeddings=embeddings,
+                faiss_index=index,
+                filing_date=transcript_date,
+            )
+            self._save_filing(key, data)
+            self._cache[key] = data
+            _log.info("Saved %d transcript chunks to %s", len(data.chunks), dest)
             ingested.append(key)
 
         return ingested
