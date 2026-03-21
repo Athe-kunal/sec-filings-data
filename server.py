@@ -138,7 +138,7 @@ def vector_store_embed(request: VectorEmbedRequest):
     """Build and persist FAISS indexes from all markdown files in a directory.
 
     Discovers every ``*.md`` file in ``markdown_dir`` and calls
-    ``from_markdown()``.  The filing type is extracted from each file stem.
+    ``from_markdown_sec_filings()``.  The filing type is extracted from each file stem.
 
     Returns the list of index keys that were built or already existed.
     """
@@ -157,7 +157,7 @@ def vector_store_embed(request: VectorEmbedRequest):
         )
 
     try:
-        keys = vector_index.from_markdown(
+        keys = vector_index.from_markdown_sec_filings(
             ticker=request.ticker,
             year=request.year,
             markdown_paths=md_paths,

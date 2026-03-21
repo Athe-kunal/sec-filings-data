@@ -185,7 +185,7 @@ class FaissVectorIndex:
         if not (path / "index.faiss").exists():
             raise FileNotFoundError(
                 f"No FAISS index on disk for {key}. "
-                "Call from_markdown() or ingest() first."
+                "Call from_markdown_sec_filings() or ingest() first."
             )
 
         cpu_index = faiss.read_index(str(path / "index.faiss"))
@@ -221,7 +221,7 @@ class FaissVectorIndex:
                 return sr.filing_date
         return None
 
-    def from_markdown(
+    def from_markdown_sec_filings(
         self,
         ticker: str,
         year: str,
@@ -334,7 +334,7 @@ class FaissVectorIndex:
                 continue
             md_paths.append(md_path)
 
-        return self.from_markdown(ticker, year, md_paths, force=force)
+        return self.from_markdown_sec_filings(ticker, year, md_paths, force=force)
 
     def list_filings(self, ticker: str, year: str) -> list[dict[str, str | None]]:
         """List all ingested filings for a given ticker and year.

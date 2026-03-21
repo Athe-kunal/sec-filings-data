@@ -12,13 +12,13 @@ from urllib.request import Request, urlopen
 
 from bs4 import BeautifulSoup
 from loguru import logger
-from playwright.sync_api import (
+from playwright.async_api import (
     Browser,
     BrowserContext,
     Page,
     Playwright,
     TimeoutError as PlaywrightTimeoutError,
-    sync_playwright,
+    async_playwright,
 )
 
 from settings import sec_settings
@@ -39,7 +39,7 @@ class Transcript:
     speaker_texts: list[SpeakerText]
 
     @classmethod
-    def from_file(cls, jsonl_path: str | Path) -> Transcript:
+    def from_file(cls, jsonl_path: str | Path) -> "Transcript":
         path = Path(jsonl_path)
         text = path.read_text(encoding="utf-8").strip()
         if not text:
@@ -60,7 +60,7 @@ class Transcript:
 
 
 class TranscriptUrlDoesNotExistError(Exception):
-    """Raised when the transcript URL returns 404 or cannot be reached via HTTP."""
+    pass
 
 
 def _make_url(ticker: str, year: int, quarter_num: int) -> str:
@@ -71,7 +71,6 @@ def _make_url(ticker: str, year: int, quarter_num: int) -> str:
 
 
 def _probe_transcript_url(url: str, *, timeout_sec: float = 20.0) -> None:
-    """HEAD/GET the URL with urllib so missing pages fail before starting Chrome."""
     request = Request(
         url,
         headers={
@@ -104,23 +103,28 @@ def _chromium_launch_args() -> list[str]:
     ]
 
 
-def _new_browser_context(playwright: Playwright) -> tuple[Browser, BrowserContext]:
-    browser = playwright.chromium.launch(
+async def _new_browser_context(
+    playwright: Playwright,
+) -> tuple[Browser, BrowserContext]:
+    browser = await playwright.chromium.launch(
         headless=True,
         args=_chromium_launch_args(),
     )
-    context = browser.new_context(
+    context = await browser.new_context(
         viewport={"width": 1920, "height": 1080},
         user_agent=(
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         ),
     )
+    context.set_default_timeout(20_000)
+    context.set_default_navigation_timeout(30_000)
     return browser, context
 
 
-def _wait_for_transcript_dom(page: Page) -> None:
-    page.wait_for_selector("div.flex.flex-col.my-5", timeout=20_000)
+async def _wait_for_transcript_dom(page: Page) -> None:
+    locator = page.locator("div.flex.flex-col.my-5").first
+    await locator.wait_for(state="visible", timeout=20_000)
 
 
 def _parse_transcript_metadata(
@@ -177,66 +181,118 @@ def _write_transcript_jsonl(transcript: Transcript) -> Path:
         / f"{transcript.ticker}-{transcript.year}"
     )
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"q{transcript.quarter_num}.jsonl"
+    path = out_dir / f"Q{transcript.quarter_num}.jsonl"
     with path.open("w", encoding="utf-8") as f:
         f.write(json.dumps(dataclasses.asdict(transcript), ensure_ascii=False) + "\n")
     return path
 
 
-def _load_transcript_with_page(
-    page: Page,
+async def _load_transcript_with_new_page(
+    context: BrowserContext,
     ticker: str,
     year: int,
     quarter_num: int,
 ) -> Transcript:
     url = _make_url(ticker, year, quarter_num)
-    _probe_transcript_url(url)
 
-    page.goto(url, wait_until="domcontentloaded")
-    _wait_for_transcript_dom(page)
+    # urllib is blocking, so push it off the event loop.
+    await asyncio.to_thread(_probe_transcript_url, url)
 
-    soup = BeautifulSoup(page.content(), "html.parser")
-    parsed_quarter, date_iso = _parse_transcript_metadata(soup, quarter_num)
-    speaker_texts = _parse_speaker_texts(soup)
+    page = await context.new_page()
+    try:
+        await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+        await _wait_for_transcript_dom(page)
 
-    transcript = Transcript(
-        ticker=ticker,
-        year=year,
-        quarter_num=parsed_quarter,
-        date=date_iso,
-        speaker_texts=speaker_texts,
-    )
-    _write_transcript_jsonl(transcript)
-    return transcript
+        soup = BeautifulSoup(await page.content(), "html.parser")
+        parsed_quarter, date_iso = _parse_transcript_metadata(soup, quarter_num)
+        speaker_texts = _parse_speaker_texts(soup)
+
+        if not speaker_texts:
+            raise ValueError(
+                f"No speaker blocks parsed for {ticker=} {year=} {quarter_num=}"
+            )
+
+        transcript = Transcript(
+            ticker=ticker,
+            year=year,
+            quarter_num=parsed_quarter,
+            date=date_iso,
+            speaker_texts=speaker_texts,
+        )
+        _write_transcript_jsonl(transcript)
+        return transcript
+    finally:
+        await page.close()
 
 
-def get_transcripts_for_year_sync(ticker: str, year: int) -> list[Transcript]:
-    transcripts: list[Transcript] = []
-    with sync_playwright() as playwright:
-        browser, context = _new_browser_context(playwright)
-        try:
-            page = context.new_page()
-            for quarter_num in (1, 2, 3, 4):
-                try:
-                    transcript = _load_transcript_with_page(
-                        page, ticker, year, quarter_num
-                    )
-                    transcripts.append(transcript)
-                except TranscriptUrlDoesNotExistError as exc:
+async def _fetch_one_quarter(
+    context: BrowserContext,
+    semaphore: asyncio.Semaphore,
+    ticker: str,
+    year: int,
+    quarter_num: int,
+    retries: int = 2,
+) -> Transcript | None:
+    async with semaphore:
+        for attempt in range(1, retries + 2):
+            try:
+                return await _load_transcript_with_new_page(
+                    context=context,
+                    ticker=ticker,
+                    year=year,
+                    quarter_num=quarter_num,
+                )
+            except TranscriptUrlDoesNotExistError as exc:
+                logger.error(
+                    f"Skipping transcript: URL missing or unreachable. "
+                    f"ticker={ticker} year={year} quarter={quarter_num} error={exc}"
+                )
+                return None
+            except (PlaywrightTimeoutError, ValueError) as exc:
+                if attempt > retries:
                     logger.error(
-                        f"Skipping transcript: URL missing or unreachable. "
-                        f"ticker={ticker} year={year} quarter={quarter_num} error={exc}"
-                    )
-                except PlaywrightTimeoutError as exc:
-                    logger.error(
-                        f"Skipping transcript: timeout waiting for transcript DOM. "
+                        f"Skipping transcript after retries. "
                         f"ticker={ticker} year={year} quarter={quarter_num} "
-                        f"error={str(exc).strip()}"
+                        f"attempt={attempt} error={str(exc).strip()}"
                     )
-        finally:
-            context.close()
-            browser.close()
+                    return None
+                backoff_sec = float(attempt)
+                logger.warning(
+                    f"Retrying transcript. "
+                    f"ticker={ticker} year={year} quarter={quarter_num} "
+                    f"attempt={attempt} backoff_sec={backoff_sec} "
+                    f"error={str(exc).strip()}"
+                )
+                await asyncio.sleep(backoff_sec)
+            except Exception as exc:
+                logger.exception(
+                    f"Unexpected error. "
+                    f"ticker={ticker} year={year} quarter={quarter_num} error={exc}"
+                )
+                return None
+    return None
 
+
+async def get_transcripts_for_year_async(
+    ticker: str,
+    year: int,
+    max_concurrency: int = 3,
+) -> list[Transcript]:
+    async with async_playwright() as playwright:
+        browser, context = await _new_browser_context(playwright)
+        try:
+            semaphore = asyncio.Semaphore(max_concurrency)
+            tasks = [
+                _fetch_one_quarter(context, semaphore, ticker, year, quarter_num)
+                for quarter_num in (1, 2, 3, 4)
+            ]
+            results = await asyncio.gather(*tasks)
+        finally:
+            await context.close()
+            await browser.close()
+
+    transcripts = [item for item in results if item is not None]
+    transcripts.sort(key=lambda item: item.quarter_num)
     return transcripts
 
 
@@ -255,14 +311,26 @@ def _parse_args() -> argparse.Namespace:
         nargs="?",
         type=int,
         default=datetime.datetime.now().year - 1,
-        help="Fiscal year (default: current year)",
+        help="Fiscal year (default: current year - 1)",
+    )
+    parser.add_argument(
+        "--max-concurrency",
+        type=int,
+        default=4,
+        help="Max number of concurrent quarter fetches",
     )
     return parser.parse_args()
 
 
 def _main(args: argparse.Namespace) -> None:
     logger.info("Fetching transcripts for ticker={} year={}", args.ticker, args.year)
-    transcripts = get_transcripts_for_year_sync(args.ticker, args.year)
+    transcripts = asyncio.run(
+        get_transcripts_for_year_async(
+            args.ticker,
+            args.year,
+            max_concurrency=args.max_concurrency,
+        )
+    )
     for item in transcripts:
         logger.info(
             "Got Q{} date={} speaker_blocks={}",
