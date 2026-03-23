@@ -38,6 +38,26 @@ class Transcript:
     date: str
     speaker_texts: list[SpeakerText]
 
+    def to_markdown(self) -> str:
+        """Format the transcript as markdown: header, date, then each speaker block."""
+        quarter_label = f"Q{self.quarter_num}"
+        date_display = self.date.strip() or "—"
+        parts: list[str] = [
+            f"# {self.ticker} · {self.year} · {quarter_label}",
+            "",
+            f"**Date:** {date_display}",
+            "",
+            "---",
+            "",
+            "## Transcript",
+            "",
+        ]
+        for block in self.speaker_texts:
+            speaker = block.speaker.strip() or "(Unknown speaker)"
+            body = block.text.strip() or "_(empty)_"
+            parts.extend([f"### {speaker}", "", body, ""])
+        return "\n".join(parts).rstrip() + "\n"
+
     @classmethod
     def from_file(cls, jsonl_path: str | Path) -> "Transcript":
         path = Path(jsonl_path)
@@ -335,38 +355,41 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def _fetch_quarters_sequentially(
-    ticker: str, year: int, quarters: tuple[str, ...]
-) -> list[Transcript]:
-    transcripts: list[Transcript] = []
-    for quarter_label in quarters:
-        item = await get_transcript_for_quarter_async(ticker, year, quarter_label)
-        if item is not None:
-            transcripts.append(item)
-    return transcripts
+async def _fetch_single_quarter(
+    ticker: str, year: int, quarter: str
+) -> Transcript | None:
+    """Fetch transcript for a single quarter, or None if unavailable."""
+    return await get_transcript_for_quarter_async(ticker, year, quarter)
 
 
 def _main(args: argparse.Namespace) -> None:
-    logger.info("Fetching transcripts for ticker={} year={}", args.ticker, args.year)
-    if args.quarter is not None:
-        try:
-            quarter_label_to_num(args.quarter)
-        except ValueError as exc:
-            raise SystemExit(f"error: {exc}") from exc
-        quarters = (args.quarter,)
-    else:
-        quarters = ("Q1", "Q2", "Q3", "Q4")
-    transcripts = asyncio.run(
-        _fetch_quarters_sequentially(args.ticker, args.year, quarters)
-    )
-    for item in transcripts:
-        logger.info(
-            "Got Q{} date={} speaker_blocks={}",
-            item.quarter_num,
-            item.date or "(none)",
-            len(item.speaker_texts),
+    logger.info(
+        "Fetching transcript for ticker={} year={} quarter={}".format(
+            args.ticker, args.year, args.quarter
         )
-    logger.info("Done: {} quarter(s) loaded", len(transcripts))
+    )
+    if args.quarter is None:
+        raise SystemExit(
+            "Please provide a quarter using --quarter (e.g., Q1, Q2, Q3, Q4)"
+        )
+    try:
+        quarter_label_to_num(args.quarter)
+    except ValueError as exc:
+        raise SystemExit(f"error: {exc}") from exc
+
+    transcript = asyncio.run(
+        _fetch_single_quarter(args.ticker, args.year, args.quarter)
+    )
+    if transcript is None:
+        logger.warning("No transcript found for the specified period")
+        return
+    logger.info(
+        "Got Q{} date={} speaker_blocks={}",
+        transcript.quarter_num,
+        transcript.date or "(none)",
+        len(transcript.speaker_texts),
+    )
+    logger.info("Done: 1 quarter loaded")
 
 
 if __name__ == "__main__":

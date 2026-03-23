@@ -26,27 +26,52 @@ class SecResults:
     primary_document: str
 
 
+def _parse_filing_type_for_sec_query(
+    filing_type: str,
+) -> tuple[frozenset[int] | None, frozenset[str]]:
+    """Build SEC ``form`` names and an optional 10-Q quarter filter (1–3 from ``10-Qn``).
+
+    Plain ``10-Q`` keeps all quarters; ``10-Q4`` raises (fourth quarter is ``10-K``).
+    """
+    raw = filing_type.strip()
+    u = raw.upper().replace(" ", "")
+    m = re.fullmatch(r"10-Q(\d)", u)
+    if m:
+        q = int(m.group(1))
+        if q not in (1, 2, 3):
+            if q == 4:
+                raise ValueError(
+                    "10-Q4 is not a valid filing type; the fourth quarter is filed as 10-K."
+                )
+            raise ValueError(
+                f"Invalid quarterly type {raw!r}; use 10-Q1, 10-Q2, or 10-Q3."
+            )
+        return frozenset({q}), frozenset({"10-Q"})
+    if u == "10-Q":
+        return None, frozenset({"10-Q"})
+    return None, frozenset({raw})
+
+
 def get_sec_results(
     ticker: str,
     year: str,
-    filing_types: list[str] = ["10-K", "10-Q"],
-    include_amends: bool = True,
+    filing_type: str = "10-K",
     company: str | None = None,
     email: str | None = None,
 ) -> list[SecResults]:
-    """Fetch SEC filing metadata for the given ticker and year."""
+    """Fetch SEC filing metadata for the given ticker and year.
+
+    Pass ``10-K``, plain ``10-Q`` (all ``10-Q`` filings for the year), or
+    ``10-Q1`` / ``10-Q2`` / ``10-Q3`` to restrict by fiscal quarter from
+    ``reportDate``. Only non-amended ``10-Q`` rows are included; ``10-Q4`` is not
+    allowed (use ``10-K``).
+    """
     company = company or sec_settings.sec_api_organization
     email = email or sec_settings.sec_api_email
     cik = utils.get_cik_by_ticker(ticker)
     logger.info(f"For {ticker=} found {cik=}")
 
-    forms = []
-    if include_amends:
-        for ft in filing_types:
-            forms.append(ft)
-            forms.append(ft + "/A")
-    else:
-        forms = list(filing_types)
+    quarter_filter, forms = _parse_filing_type_for_sec_query(filing_type)
 
     url = f"https://data.sec.gov/submissions/CIK{cik}.json"
     headers = {
@@ -80,6 +105,8 @@ def get_sec_results(
             if form_name == "10-Q":
                 datetime_obj = datetime.strptime(report_date, "%Y-%m-%d")
                 quarter = (datetime_obj.month + 2) // 3
+                if quarter_filter is not None and quarter not in quarter_filter:
+                    continue
                 display_name = f"10-Q{quarter}"
                 if display_name in sec_form_names:
                     display_name += "-1"
@@ -156,17 +183,19 @@ def load_sec_results(ticker: str, year: str) -> list[SecResults]:
 async def sec_main(
     ticker: str,
     year: str,
-    filing_types: list[str] = ["10-K", "10-Q"],
-    include_amends: bool = True,
+    filing_type: str = "10-K",
 ) -> tuple[list[SecResults], list[Path]]:
-    """Fetch SEC results and save them as PDFs."""
+    """Fetch SEC results and save them as PDFs.
+
+    Use ``10-Q1``, ``10-Q2``, or ``10-Q3`` to fetch one quarter (from report date);
+    ``10-Q`` fetches all quarterly filings for the year.
+    """
     ticker_name = utils.company_to_ticker(ticker)
     assert ticker_name, f"The {ticker=} that you provided, is not valid"
     sec_results = get_sec_results(
         ticker=ticker,
         year=year,
-        filing_types=filing_types,
-        include_amends=include_amends,
+        filing_type=filing_type,
     )
     pdf_paths = await save_sec_results_as_pdfs(
         sec_results=sec_results,
@@ -183,22 +212,17 @@ if __name__ == "__main__":
     parser.add_argument("--ticker", type=str, required=True, help="Stock ticker symbol")
     parser.add_argument("--year", type=str, required=True, help="Filing year")
     parser.add_argument(
-        "--filing-types",
-        nargs="+",
-        default=["10-K", "10-Q"],
-        help="Filing types to fetch",
+        "--filing-type",
+        type=str,
+        default="10-K",
+        help="SEC form to fetch (e.g. 10-K, 10-Q, 10-Q1, 10-Q2, 10-Q3)",
     )
-    parser.add_argument(
-        "--include-amends", type=bool, default=True, help="Include amended filings"
-    )
-
     args = parser.parse_args()
 
     asyncio.run(
         sec_main(
             ticker=args.ticker,
             year=args.year,
-            filing_types=args.filing_types,
-            include_amends=args.include_amends,
+            filing_type=args.filing_type,
         )
     )

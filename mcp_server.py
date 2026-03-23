@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-import dataclasses
 import mimetypes
 from pathlib import Path
 from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 
-from earnings_transcripts.transcripts import get_transcript_for_quarter_async
+from earnings_transcripts.transcripts import (
+    get_transcript_for_quarter_async,
+)
 from mcp.server.transport_security import TransportSecuritySettings
 from filings.sec_data import sec_main
 from filings.utils import company_to_ticker
@@ -75,8 +76,8 @@ def company_name_to_ticker_tool(name: str) -> dict[str, str]:
 @mcp.tool()
 async def earnings_transcript_for_quarter_tool(
     ticker: str, year: int, quarter: Literal["Q1", "Q2", "Q3", "Q4"]
-) -> dict:
-    """Fetch one earnings-call transcript for a ticker, year, and quarter.
+) -> str:
+    """Fetch one earnings-call transcript and return it as markdown.
 
     Args:
         ticker: Equity ticker symbol, for example ``"AMZN"``.
@@ -88,30 +89,27 @@ async def earnings_transcript_for_quarter_tool(
         raise ValueError(
             f"No transcript available for ticker={ticker} year={year} {quarter}"
         )
-    return dataclasses.asdict(transcript)
+    return transcript.to_markdown()
 
 
 @mcp.tool()
 async def sec_main_tool(
     ticker: str,
     year: str,
-    filing_types: list[str] | None = None,
-    include_amends: bool = True,
+    filing_type: str = "10-K",
 ) -> dict:
     """Fetch SEC filings and persist PDFs under the configured SEC data directory.
 
     Args:
         ticker: Equity ticker symbol, for example ``"AMZN"``.
         year: Filing year, typically a four-digit string.
-        filing_types: SEC form types to request, such as ``["10-K", "10-Q"]``.
-        include_amends: Whether amended forms (for example ``10-K/A``) are included.
+        filing_type: e.g. ``10-K``, ``10-Q``, or ``10-Q1``/``10-Q2``/``10-Q3``.
+            ``10-Q4`` is invalid.
     """
-    effective_filing_types = filing_types or ["10-K", "10-Q"]
     sec_results, pdf_paths = await sec_main(
         ticker=ticker,
         year=year,
-        filing_types=effective_filing_types,
-        include_amends=include_amends,
+        filing_type=filing_type,
     )
     return {
         "sec_results": [

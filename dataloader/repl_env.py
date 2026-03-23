@@ -61,7 +61,6 @@ if __name__ == "__main__":
             ticker="AMZN",
             year="2025",
             filing_type="10-K",
-            include_amends=True,
         )
     )
     for env in envs:

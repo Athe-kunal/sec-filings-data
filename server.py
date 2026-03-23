@@ -46,8 +46,7 @@ def company_name_to_ticker(request: CompanyNameRequest):
 class SecMainRequest(BaseModel):
     ticker: str
     year: str
-    filing_types: list[str] = ["10-K", "10-Q"]
-    include_amends: bool = True
+    filing_type: str = "10-K"
 
 
 class EarningsTranscriptQuarterRequest(BaseModel):
@@ -80,8 +79,7 @@ async def sec_main_endpoint(request: SecMainRequest):
     sec_results, pdf_paths = await sec_main(
         ticker=request.ticker,
         year=request.year,
-        filing_types=request.filing_types,
-        include_amends=request.include_amends,
+        filing_type=request.filing_type,
     )
     return {
         "sec_results": [

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-from collections.abc import Sequence
 
 
 def company_name_to_ticker(name: str) -> str | None:
@@ -17,8 +16,7 @@ def company_name_to_ticker(name: str) -> str | None:
 async def fetch_sec_filings(
     ticker: str,
     year: str,
-    filing_types: Sequence[str] = ("10-K", "10-Q"),
-    include_amends: bool = True,
+    filing_type: str = "10-K",
 ) -> dict:
     """Fetch SEC filings and return the same payload shape as the server endpoint."""
     from filings.sec_data import sec_main
@@ -26,8 +24,7 @@ async def fetch_sec_filings(
     sec_results, pdf_paths = await sec_main(
         ticker=ticker,
         year=year,
-        filing_types=list(filing_types),
-        include_amends=include_amends,
+        filing_type=filing_type,
     )
 
     return {
@@ -48,16 +45,14 @@ async def fetch_sec_filings(
 def fetch_sec_filings_sync(
     ticker: str,
     year: str,
-    filing_types: Sequence[str] = ("10-K", "10-Q"),
-    include_amends: bool = True,
+    filing_type: str = "10-K",
 ) -> dict:
     """Synchronous wrapper for `fetch_sec_filings`."""
     return asyncio.run(
         fetch_sec_filings(
             ticker=ticker,
             year=year,
-            filing_types=filing_types,
-            include_amends=include_amends,
+            filing_type=filing_type,
         )
     )
 

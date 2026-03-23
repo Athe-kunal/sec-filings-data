@@ -197,9 +197,11 @@ class ChromaVectorStore:
                     "chunk_index": chunk.index,
                     "chunk_type": chunk.chunk_type,
                     "section_title": chunk.section_title or "",
-                    "page_num": chunk.page_num
-                    if chunk.page_num is not None
-                    else _CHROMA_MISSING_PAGE_NUM,
+                    "page_num": (
+                        chunk.page_num
+                        if chunk.page_num is not None
+                        else _CHROMA_MISSING_PAGE_NUM
+                    ),
                     "text": chunk.text,
                 }
             )
