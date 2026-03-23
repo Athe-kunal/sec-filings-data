@@ -87,6 +87,8 @@ Use your client’s documented configuration for **Streamable HTTP** / URL-based
 - `sec_main_to_markdown_and_embed_tool`, `earnings_transcript_for_quarter_tool`
 - `search_sec_filings_tool`, `search_transcripts_tool`
 
+For an interactive walkthrough of how to use the MCP, [open this ChatGPT chats](https://chatgpt.com/share/69c0bf65-54a8-8010-bd40-6aa33908a1e6).
+
 **Resources** (URI catalogs under `resource://sec-filings-data/...`): combined SEC + transcript file listings and per-root trees.
 
 ## Docker
