@@ -14,7 +14,7 @@ _SECTION_TITLE_RE = re.compile(
     r"^(Item\s+\d+[A-C]?\..*|Part\s+[IV]+.*)",
     re.MULTILINE | re.IGNORECASE,
 )
-_SEC_CHUNK_SIZE = 1024
+_SEC_CHUNK_SIZE = 2048
 _SEC_CHUNK_OVERLAP = 128
 _EARNINGS_TRANSCRIPT_CHUNK_SIZE = 2048
 _EARNINGS_TRANSCRIPT_OVERLAP = 256
@@ -148,7 +148,9 @@ def chunk_transcript_rows(
             continue
 
         for part in splitter.split_text(clean_text):
-            chunk_text = f"Speaker: {clean_speaker}\nText: {part}" if clean_speaker else part
+            chunk_text = (
+                f"Speaker: {clean_speaker}\nText: {part}" if clean_speaker else part
+            )
             chunks.append(
                 Chunk(
                     text=chunk_text,

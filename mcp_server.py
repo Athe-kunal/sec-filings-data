@@ -29,7 +29,7 @@ _RESOURCE_HINT = (
 mcp = FastMCP(
     "sec-filings-data",
     host="127.0.0.1",
-    port=8000,
+    port=8069,
     transport_security=TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
         allowed_hosts=[
@@ -64,7 +64,9 @@ def _transcript_root() -> Path:
 def _list_relative_files(root: Path, pattern: str) -> list[str]:
     if not root.exists():
         return []
-    return sorted(str(path.relative_to(root)) for path in root.glob(pattern) if path.is_file())
+    return sorted(
+        str(path.relative_to(root)) for path in root.glob(pattern) if path.is_file()
+    )
 
 
 def _directory_tree(root: Path) -> str:
@@ -73,7 +75,9 @@ def _directory_tree(root: Path) -> str:
         return f"{root} (missing)"
 
     lines = [str(root)]
-    entries = sorted(root.rglob("*"), key=lambda p: (len(p.relative_to(root).parts), str(p)))
+    entries = sorted(
+        root.rglob("*"), key=lambda p: (len(p.relative_to(root).parts), str(p))
+    )
     for entry in entries:
         depth = len(entry.relative_to(root).parts)
         indent = "  " * depth
@@ -192,7 +196,6 @@ async def earnings_transcript_for_quarter_tool(
     ticker: str,
     year: int,
     quarter: Literal["Q1", "Q2", "Q3", "Q4"],
-    force: bool = False,
 ) -> dict[str, object]:
     """Fetch one earnings-call transcript, save markdown, and embed it.
 
@@ -200,7 +203,6 @@ async def earnings_transcript_for_quarter_tool(
         ticker: Equity ticker symbol, for example ``"AMZN"``.
         year: Four-digit fiscal year.
         quarter: Fiscal quarter label ``Q1``, ``Q2``, ``Q3``, or ``Q4``.
-        force: Whether to replace any existing vectors for this quarter.
     """
     transcript = await get_transcript_for_quarter_async(ticker, year, quarter)
     if transcript is None:
@@ -209,10 +211,7 @@ async def earnings_transcript_for_quarter_tool(
         )
     markdown_path = save_transcript_markdown(transcript)
     embedded_keys = _get_vector_index().from_earnings_transcript_markdown(
-        ticker=ticker,
-        year=str(year),
-        transcript_paths=[markdown_path],
-        force=force,
+        ticker=ticker, year=str(year), transcript_paths=[markdown_path], force=False
     )
     return {
         "ticker": ticker,
@@ -245,14 +244,20 @@ async def sec_main_to_markdown_and_embed_tool(
     ticker: str,
     year: str,
     filing_type: str = "10-K",
-    force: bool = False,
 ) -> dict:
-    """Download one SEC filing PDF (if needed), OCR to markdown (if needed), and embed markdown."""
+    """Download one SEC filing PDF (if needed), OCR to markdown (if needed), and embed markdown.
+
+    Args:
+        ticker: Equity ticker symbol, for example ``"GOOG"`` or ``"AMZN"``.
+        year: Filing year as a string (four digits), matching the SEC filing period.
+        filing_type: Form or period key to fetch, for example ``"10-K"`` or ``"10-Q1"``
+            through ``"10-Q3"`` for quarterly reports.
+    """
     payload = await sec_main_to_markdown_and_embed(
         ticker=ticker,
         year=year,
         filing_type=filing_type,
-        force=force,
+        force=False,
     )
     sec_result = payload["sec_result"]
     return {
