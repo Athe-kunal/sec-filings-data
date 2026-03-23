@@ -241,7 +241,7 @@ def _parse_speaker_texts(soup: BeautifulSoup) -> list[SpeakerText]:
     return speaker_texts
 
 
-def _write_transcript_markdown(transcript: Transcript) -> Path:
+def save_transcript_markdown(transcript: Transcript) -> Path:
     out_dir = (
         Path(sec_settings.earnings_transcripts_dir)
         / transcript.ticker
@@ -255,11 +255,6 @@ def _write_transcript_markdown(transcript: Transcript) -> Path:
     with path.open("w", encoding="utf-8") as f:
         f.write(transcript.to_markdown())
     return path
-
-
-def save_transcript_markdown(transcript: Transcript) -> Path:
-    """Persist one transcript as markdown and return the saved file path."""
-    return _write_transcript_markdown(transcript)
 
 
 def convert_transcript_jsonl_to_markdown(
@@ -322,7 +317,7 @@ async def _load_transcript_with_new_page(
             date=date_iso,
             speaker_texts=speaker_texts,
         )
-        _write_transcript_markdown(transcript)
+        save_transcript_markdown(transcript)
         return transcript
     finally:
         await page.close()
