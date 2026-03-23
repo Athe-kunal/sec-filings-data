@@ -26,21 +26,22 @@ _RESOURCE_HINT = (
     "`earnings_transcript_for_quarter_tool` (transcripts + embeddings)."
 )
 
+
+def _mcp_transport_allowed_hosts() -> list[str]:
+    return [
+        f"{sec_settings.mcp_host}:*",
+        "localhost:*",
+        *sec_settings.mcp_ngrok_allowed_hosts,
+    ]
+
+
 mcp = FastMCP(
     "sec-filings-data",
-    host="127.0.0.1",
-    port=8069,
+    host=sec_settings.mcp_host,
+    port=sec_settings.mcp_port,
     transport_security=TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
-        allowed_hosts=[
-            "127.0.0.1:*",
-            "localhost:*",
-            "shirleen-supercritical-contributively.ngrok-free.dev",
-        ],
-        allowed_origins=[
-            "http://localhost:*",
-            "https://shirleen-supercritical-contributively.ngrok-free.dev",
-        ],
+        allowed_hosts=_mcp_transport_allowed_hosts(),
     ),
 )
 
@@ -181,7 +182,13 @@ def transcripts_resource_catalog() -> str:
 @mcp.tool()
 def company_name_to_ticker_tool(name: str) -> dict[str, str]:
     """Resolve a company name to its stock ticker symbol.
-
+    Usage guidance:
+      - Use this when a user gives only a company name (for example
+        "Amazon" or "Alphabet") and downstream tools require a ticker.
+      - Skip this when the user already provided a valid ticker symbol.
+      - If you already know the ticker from prior knowledge or prior steps, do not call
+        this tool.
+      - Call this once per company and reuse the returned ticker.
     Args:
         name: Full or partial company name to resolve.
     """

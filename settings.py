@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +29,16 @@ class SECSettings(BaseSettings):
 
     # FastAPI server URL
     server_url: str = "http://127.0.0.1:8888"
+
+    # MCP server (FastMCP streamable-http bind + transport DNS rebinding allowlist)
+    mcp_host: str = "127.0.0.1"
+    mcp_port: int = 8069
+    # Ngrok (or similar) tunnel hostnames allowed by MCP transport security Host checks.
+    mcp_ngrok_allowed_hosts: list[str] = Field(
+        default_factory=lambda: [
+            "shirleen-supercritical-contributively.ngrok-free.dev",
+        ],
+    )
 
 
 sec_settings = SECSettings()
