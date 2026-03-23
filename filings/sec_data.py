@@ -157,23 +157,11 @@ async def save_sec_results_as_pdfs(
         email=email,
     )
     if not pdf_paths:
-        raise RuntimeError(f"Failed to save PDF for {ticker} {year} {sec_result.form_name}")
+        raise RuntimeError(
+            f"Failed to save PDF for {ticker} {year} {sec_result.form_name}"
+        )
     logger.info(f"Saved SEC PDF to {output_path}")
     return pdf_paths[0]
-
-
-def load_sec_results(ticker: str, year: str) -> list[SecResults]:
-    """Load filing metadata from SEC API for known per-filing types for this year."""
-    filing_types = ("10-K", "10-Q1", "10-Q2", "10-Q3")
-    results: list[SecResults] = []
-    for filing_type in filing_types:
-        try:
-            results.extend(get_sec_results(ticker=ticker, year=year, filing_type=filing_type))
-        except Exception as exc:
-            logger.debug(
-                f"Skipping metadata lookup for {ticker=} {year=} {filing_type=}: {exc}"
-            )
-    return results
 
 
 async def sec_main(

@@ -13,7 +13,6 @@ from openai import OpenAI
 
 from dataloader.text_splitter import Chunk, chunk_markdown
 from earnings_transcripts.transcripts import Transcript
-from filings.sec_data import load_sec_results
 from settings import sec_settings
 
 _log = logging.getLogger(__name__)
