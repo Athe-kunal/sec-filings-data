@@ -3,11 +3,11 @@
 import dataclasses
 
 from earnings_transcripts.transcripts import get_transcript_for_quarter_async
-from filings.sec_data import sec_main_to_markdown_and_embed
+from filings.sec_data import sec_main_to_markdown_and_embed, SecResults
 from server_api.models import BatchEarningsTranscriptItem, BatchSecFilingItem
 
 
-def serialize_sec_result(sec_result: object) -> dict:
+def serialize_sec_result(sec_result: SecResults) -> dict[str, str]:
     """Convert SEC result dataclass/object into a JSON-friendly dict."""
     return {
         "dashes_acc_num": sec_result.dashes_acc_num,

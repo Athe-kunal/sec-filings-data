@@ -73,12 +73,7 @@ async def earnings_transcript_for_quarter(request: EarningsTranscriptQuarterRequ
             status_code=404,
             detail="Transcript not available for this ticker, year, and quarter",
         )
-    return {
-        "ticker": request.ticker,
-        "year": request.year,
-        "quarter": request.quarter,
-        "transcript": dataclasses.asdict(transcript),
-    }
+    return dataclasses.asdict(transcript)
 
 
 @app.post("/sec_main")
