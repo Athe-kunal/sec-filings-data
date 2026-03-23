@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 
 from earnings_transcripts.transcripts import (
     get_transcript_for_quarter_async,
+    save_transcript_markdown,
 )
 from dataloader.text_splitter import Chunk
 from dataloader.vector_store import ChromaVectorStore
@@ -17,6 +20,11 @@ from filings.utils import company_to_ticker
 from settings import sec_settings
 
 _vector_index: ChromaVectorStore | None = None
+_RESOURCE_HINT = (
+    "If the exact file is missing, generate and embed it with "
+    "`sec_main_to_markdown_and_embed_tool` (SEC filings) or "
+    "`earnings_transcript_for_quarter_tool` (transcripts + embeddings)."
+)
 
 mcp = FastMCP(
     "sec-filings-data",
@@ -45,6 +53,127 @@ def _get_vector_index() -> ChromaVectorStore:
     return _vector_index
 
 
+def _sec_pdf_root() -> Path:
+    return Path(sec_settings.sec_data_dir)
+
+
+def _transcript_root() -> Path:
+    return Path(sec_settings.earnings_transcripts_dir)
+
+
+def _list_relative_files(root: Path, pattern: str) -> list[str]:
+    if not root.exists():
+        return []
+    return sorted(str(path.relative_to(root)) for path in root.glob(pattern) if path.is_file())
+
+
+def _directory_tree(root: Path) -> str:
+    """Render a human-readable tree where leaves are files under ``root``."""
+    if not root.exists():
+        return f"{root} (missing)"
+
+    lines = [str(root)]
+    entries = sorted(root.rglob("*"), key=lambda p: (len(p.relative_to(root).parts), str(p)))
+    for entry in entries:
+        depth = len(entry.relative_to(root).parts)
+        indent = "  " * depth
+        suffix = "/" if entry.is_dir() else ""
+        lines.append(f"{indent}- {entry.name}{suffix}")
+    return "\n".join(lines)
+
+
+def _sec_resources_payload() -> dict[str, object]:
+    root = _sec_pdf_root()
+    return {
+        "resource_kind": "sec_filings",
+        "base_dir": str(root),
+        "directory_structure_format": (
+            "Tree format uses `- <name>/` for directories and `- <name>` for files. "
+            "Indentation is two spaces per depth level below `base_dir`."
+        ),
+        "expected_layout": "{SEC_DATA_DIR}/{TICKER}-{YEAR}/{FILING_TYPE}.pdf",
+        "pdf_files": _list_relative_files(root, "**/*.pdf"),
+        "directory_structure": _directory_tree(root),
+        "hint": _RESOURCE_HINT,
+    }
+
+
+def _transcript_resources_payload() -> dict[str, object]:
+    root = _transcript_root()
+    return {
+        "resource_kind": "earnings_transcripts",
+        "base_dir": str(root),
+        "directory_structure_format": (
+            "Tree format uses `- <name>/` for directories and `- <name>` for files. "
+            "Indentation is two spaces per depth level below `base_dir`."
+        ),
+        "expected_layout": "{EARNINGS_TRANSCRIPTS_DIR}/{TICKER}/{YEAR}/Q{N}_{YYYY-MM-DD}.md",
+        "transcript_files": _list_relative_files(root, "**/*.md"),
+        "directory_structure": _directory_tree(root),
+        "hint": _RESOURCE_HINT,
+    }
+
+
+def _all_resources_payload() -> dict[str, object]:
+    return {
+        "resources": [
+            _sec_resources_payload(),
+            _transcript_resources_payload(),
+        ]
+    }
+
+
+@mcp.resource(
+    "resource://sec-filings-data/resources/all",
+    name="All SEC resources",
+    description=(
+        "Lists SEC filing PDFs and transcript markdown files from configured paths, "
+        "including directory structure and generation hints."
+    ),
+)
+def all_resources_catalog() -> str:
+    """List all available SEC/transcript resources based on ``settings.py`` paths."""
+    return json.dumps(_all_resources_payload(), indent=2)
+
+
+@mcp.resource(
+    "resource://sec-filings-data/resources/sec-filings",
+    name="SEC filing resources",
+    description=(
+        "Lists SEC filing PDF resources and directory structure rooted at "
+        "`settings.sec_data_dir`."
+    ),
+)
+def sec_filings_resource_catalog() -> str:
+    """List SEC filing PDFs with directory structure from ``settings.sec_data_dir``.
+
+    Directory tree format:
+    - ``- <name>/`` denotes a directory.
+    - ``- <name>`` denotes a file.
+    - Two-space indentation denotes each directory depth.
+    """
+    return json.dumps(_sec_resources_payload(), indent=2)
+
+
+@mcp.resource(
+    "resource://sec-filings-data/resources/transcripts",
+    name="Transcript resources",
+    description=(
+        "Lists earnings transcript markdown resources and directory structure rooted at "
+        "`settings.earnings_transcripts_dir`."
+    ),
+)
+def transcripts_resource_catalog() -> str:
+    """List transcript markdown files with directory structure from transcript settings.
+
+    Directory tree format:
+    - ``- <name>/`` denotes a directory.
+    - ``- <name>`` denotes a file.
+    - Two-space indentation denotes each directory depth.
+    """
+    return json.dumps(_transcript_resources_payload(), indent=2)
+
+
 @mcp.tool()
 def company_name_to_ticker_tool(name: str) -> dict[str, str]:
     """Resolve a company name to its stock ticker symbol.
@@ -60,21 +189,55 @@ def company_name_to_ticker_tool(name: str) -> dict[str, str]:
 
 @mcp.tool()
 async def earnings_transcript_for_quarter_tool(
-    ticker: str, year: int, quarter: Literal["Q1", "Q2", "Q3", "Q4"]
-) -> str:
-    """Fetch one earnings-call transcript and return it as markdown.
+    ticker: str,
+    year: int,
+    quarter: Literal["Q1", "Q2", "Q3", "Q4"],
+    force: bool = False,
+) -> dict[str, object]:
+    """Fetch one earnings-call transcript, save markdown, and embed it.
 
     Args:
         ticker: Equity ticker symbol, for example ``"AMZN"``.
         year: Four-digit fiscal year.
         quarter: Fiscal quarter label ``Q1``, ``Q2``, ``Q3``, or ``Q4``.
+        force: Whether to replace any existing vectors for this quarter.
     """
     transcript = await get_transcript_for_quarter_async(ticker, year, quarter)
     if transcript is None:
         raise ValueError(
             f"No transcript available for ticker={ticker} year={year} {quarter}"
         )
-    return transcript.to_markdown()
+    markdown_path = save_transcript_markdown(transcript)
+    embedded_keys = _get_vector_index().from_earnings_transcript_markdown(
+        ticker=ticker,
+        year=str(year),
+        transcript_paths=[markdown_path],
+        force=force,
+    )
+    return {
+        "ticker": ticker,
+        "year": year,
+        "quarter": quarter,
+        "markdown_path": str(markdown_path),
+        "embedded": [
+            {"ticker": key.ticker, "year": key.year, "filing_type": key.filing_type}
+            for key in embedded_keys
+        ],
+    }
+
+
+@mcp.tool()
+def list_resources_tool() -> dict[str, object]:
+    """Return all SEC/transcript file resources and directory structures.
+
+    Notes:
+    - SEC filings are discovered from ``settings.sec_data_dir`` and reported as PDFs.
+    - Earnings transcripts are discovered from ``settings.earnings_transcripts_dir``
+      and reported as markdown files.
+    - If a file is missing, use ``sec_main_to_markdown_and_embed_tool`` or
+      ``earnings_transcript_for_quarter_tool`` to generate + embed data.
+    """
+    return _all_resources_payload()
 
 
 @mcp.tool()

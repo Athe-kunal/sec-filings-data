@@ -257,6 +257,11 @@ def _write_transcript_markdown(transcript: Transcript) -> Path:
     return path
 
 
+def save_transcript_markdown(transcript: Transcript) -> Path:
+    """Persist one transcript as markdown and return the saved file path."""
+    return _write_transcript_markdown(transcript)
+
+
 def convert_transcript_jsonl_to_markdown(
     jsonl_path: str | Path, *, delete_jsonl: bool = False
 ) -> Path:
