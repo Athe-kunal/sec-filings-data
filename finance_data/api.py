@@ -76,9 +76,7 @@ def fetch_earnings_transcript_for_quarter_sync(
     ticker: str, year: int, quarter: str
 ) -> dict | None:
     """Synchronous wrapper for `fetch_earnings_transcript_for_quarter`."""
-    return asyncio.run(
-        fetch_earnings_transcript_for_quarter(ticker, year, quarter)
-    )
+    return asyncio.run(fetch_earnings_transcript_for_quarter(ticker, year, quarter))
 
 
 async def run_olmo_ocr(pdf_dir: str) -> None:

@@ -52,9 +52,7 @@ async def ensure_sec_data(
     )
     output_dir = Path("sec_data") / f"{ticker}-{year}"
 
-    filtered = [
-        sr for sr in sec_results if _matches_filing_type(sr, filing_type)
-    ]
+    filtered = [sr for sr in sec_results if _matches_filing_type(sr, filing_type)]
     existing_paths: list[Path] = []
     missing_results: list[SecResults] = []
     for sr in filtered:

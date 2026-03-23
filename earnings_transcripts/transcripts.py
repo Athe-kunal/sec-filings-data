@@ -415,7 +415,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--quarter",
         type=str,
-        default=None,
+        default="Q4",
         metavar="QX",
         help="Quarter label: Q1, Q2, Q3, or Q4 (case-insensitive). "
         "If omitted, fetches Q1–Q4 sequentially.",
