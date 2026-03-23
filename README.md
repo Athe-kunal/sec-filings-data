@@ -11,27 +11,85 @@ Settings are loaded via Pydantic Settings from environment variables or a `.env`
 | `OLMOCR_SERVER` | vLLM server URL for olmOCR | `http://localhost:8000/v1` |
 | `OLMOCR_MODEL` | Model name for olmOCR | `allenai/olmOCR-2-7B-1025-FP8` |
 | `OLMOCR_WORKSPACE` | Workspace directory for OCR output | `./localworkspace` |
-| `EARNINGS_TRANSCRIPTS_DIR` | Directory for fetched transcript JSONL files | `earnings_transcripts_data` |
+| `EARNINGS_TRANSCRIPTS_DIR` | Directory for fetched transcript Markdown files | `earnings_transcripts_data` |
 | `EMBEDDING_SERVER` | OpenAI-compatible embedding API (e.g. vLLM pooling) | `http://127.0.0.1:8888/v1` |
 | `EMBEDDING_MODEL` | Model id passed to the embedding server | `Qwen/Qwen3-Embedding-0.6B` |
 | `CHROMA_PERSIST_DIR` | ChromaDB persistence directory | `./chroma_db` |
+| `MCP_HOST` | Bind address for the MCP HTTP server | `127.0.0.1` |
+| `MCP_PORT` | Listen port for the MCP HTTP server | `8069` |
+| `MCP_NGROK_ALLOWED_HOSTS` | JSON list of extra `Host` values allowed through the tunnel (see MCP section) | (see `settings.py`) |
 
 
 ## MCP server
 
-This repository includes an MCP server at `mcp_server.py` that exposes the same operational functions as `server.py` (SEC fetch, OCR, embedding, and search), plus file exploration tools for PDFs, JSONL, markdown, and other artifacts under configured data roots.
+`mcp_server.py` exposes SEC filing and earnings-transcript workflows over MCP (fetch/OCR, embed, semantic search) using the same backends as the REST API: **olmOCR** and an **OpenAI-compatible embedding** endpoint backed by vLLM.
 
-Run it with the MCP dependency group:
+### 1. Start the vLLM backends
+
+The MCP tools need both servers running before you start the MCP process.
+
+**Terminal A — olmOCR (vision / markdown pipeline)** — must match `OLMOCR_SERVER` (default `http://localhost:8000/v1`):
 
 ```bash
-uv run --group mcp python mcp_server.py
+make vllm-olmocr-serve
 ```
 
-Key exploration tools exposed to MCP clients:
+**Terminal B — embeddings (pooling runner)** — must match `EMBEDDING_SERVER` (default `http://127.0.0.1:8888/v1`):
 
-- `list_data_roots_tool`: shows root directories available for browsing.
-- `list_data_files_tool`: glob file listing (for example `**/*.pdf`, `**/*.jsonl`).
-- `read_data_file_tool`: reads text-based files directly and provides metadata/preview for binary files.
+```bash
+make vllm-embd-serve
+```
+
+If you change `PORT` / `EMBD_PORT` in the `Makefile` or your environment, set `OLMOCR_SERVER` and `EMBEDDING_SERVER` in `.env` so they point at the same hosts and ports.
+
+### 2. Install dependencies and run the MCP server
+
+Chroma, OpenAI client, and OCR-related imports require the `ocr-md` group in addition to `mcp`:
+
+```bash
+uv sync --group ocr-md --group mcp
+uv run --group ocr-md --group mcp python mcp_server.py
+```
+
+The server listens on `MCP_HOST` / `MCP_PORT` (defaults `127.0.0.1:8069`) using the **streamable HTTP** transport. The HTTP endpoint path is **`/mcp`** (FastMCP default), so locally that is `http://127.0.0.1:8069/mcp`.
+
+### 3. Expose with ngrok and connect a client
+
+To use the MCP server from another machine or from a hosted MCP client, tunnel the MCP port with [ngrok](https://ngrok.com/) (or a similar HTTPS reverse proxy).
+
+1. Install and log in to ngrok (`ngrok config add-authtoken …`).
+2. With `mcp_server.py` still running, forward the MCP port (replace `8069` if you changed `MCP_PORT`):
+
+   ```bash
+   ngrok http 8069
+   ```
+
+3. Note the **public HTTPS hostname** ngrok assigns (for example `https://random-name.ngrok-free.app` or `*.ngrok-free.dev`).
+4. Add that hostname to **`MCP_NGROK_ALLOWED_HOSTS`** so DNS rebinding protection accepts the tunnel’s `Host` header. In `.env`, use a JSON array, for example:
+
+   ```bash
+   MCP_NGROK_ALLOWED_HOSTS='["random-name.ngrok-free.app"]'
+   ```
+
+   Restart `mcp_server.py` after changing this.
+
+5. Point your MCP client at the tunneled URL **including `/mcp`**, for example:
+
+   `https://random-name.ngrok-free.app/mcp`
+
+Use your client’s documented configuration for **Streamable HTTP** / URL-based MCP servers. If the tunnel hostname changes each time you run ngrok, update `MCP_NGROK_ALLOWED_HOSTS` and restart the MCP process.
+
+### Tools and resources
+
+**Tools** (representative):
+
+- `company_name_to_ticker_tool`, `list_resources_tool`
+- `sec_main_to_markdown_and_embed_tool`, `earnings_transcript_for_quarter_tool`
+- `search_sec_filings_tool`, `search_transcripts_tool`
+
+For an interactive walkthrough of how to use the MCP, [open this ChatGPT chats](https://chatgpt.com/share/69c0bf65-54a8-8010-bd40-6aa33908a1e6).
+
+**Resources** (URI catalogs under `resource://sec-filings-data/...`): combined SEC + transcript file listings and per-root trees.
 
 ## Docker
 
@@ -159,7 +217,7 @@ uv run python ocr/olmocr_pipeline.py --pdf-dir sec_data/AMZN-2025
 
 ## Earnings call transcripts
 
-Transcripts are scraped from [discountingcashflows.com](https://discountingcashflows.com) (Playwright + Chromium). Each quarter is saved as one JSONL file under `{EARNINGS_TRANSCRIPTS_DIR}/{TICKER}/{year}/Q{n}.jsonl`.
+Transcripts are scraped from [discountingcashflows.com](https://discountingcashflows.com) (Playwright + Chromium). Each quarter is saved as one Markdown file under `{EARNINGS_TRANSCRIPTS_DIR}/{TICKER}/{year}/Q{n}_{YYYY-MM-DD}.md` (date may be `unknown-date` when unavailable).
 
 ### 1. Fetch transcripts
 

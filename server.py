@@ -4,13 +4,20 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from dataloader.text_splitter import Chunk
 from dataloader.vector_store import ChromaVectorStore
-from earnings_transcripts.transcripts import get_transcripts_for_year_async
+from earnings_transcripts.transcripts import (
+    get_transcript_for_quarter_async,
+    quarter_label_to_num,
+)
 from filings.utils import company_to_ticker
-from filings.sec_data import sec_main
+from filings.sec_data import (
+    sec_main,
+    sec_main_to_markdown,
+    sec_main_to_markdown_and_embed,
+)
 from ocr.olmocr_pipeline import run_olmo_ocr
 from settings import sec_settings
 
@@ -43,42 +50,110 @@ def company_name_to_ticker(request: CompanyNameRequest):
 class SecMainRequest(BaseModel):
     ticker: str
     year: str
-    filing_types: list[str] = ["10-K", "10-Q"]
-    include_amends: bool = True
+    filing_type: str = "10-K"
 
 
-class EarningsTranscriptsYearRequest(BaseModel):
+class EarningsTranscriptQuarterRequest(BaseModel):
     ticker: str
     year: int
+    quarter: str
+
+    @field_validator("quarter")
+    @classmethod
+    def validate_quarter_label(cls, value: str) -> str:
+        return f"Q{quarter_label_to_num(value)}"
 
 
-@app.post("/earnings_transcripts/for_year")
-async def earnings_transcripts_for_year(request: EarningsTranscriptsYearRequest):
-    transcripts = await get_transcripts_for_year_async(request.ticker, request.year)
-    return [dataclasses.asdict(t) for t in transcripts]
+@app.post("/earnings_transcripts/for_quarter")
+async def earnings_transcript_for_quarter(request: EarningsTranscriptQuarterRequest):
+    transcript = await get_transcript_for_quarter_async(
+        request.ticker, request.year, request.quarter
+    )
+    if transcript is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Transcript not available for this ticker, year, and quarter",
+        )
+    return dataclasses.asdict(transcript)
 
 
 @app.post("/sec_main")
 async def sec_main_endpoint(request: SecMainRequest):
     """Fetch SEC filings and save them as PDFs."""
-    sec_results, pdf_paths = await sec_main(
+    sec_result, pdf_path = await sec_main(
         ticker=request.ticker,
         year=request.year,
-        filing_types=request.filing_types,
-        include_amends=request.include_amends,
+        filing_type=request.filing_type,
     )
     return {
-        "sec_results": [
-            {
-                "dashes_acc_num": r.dashes_acc_num,
-                "form_name": r.form_name,
-                "filing_date": r.filing_date,
-                "report_date": r.report_date,
-                "primary_document": r.primary_document,
-            }
-            for r in sec_results
-        ],
-        "pdf_paths": [str(p) for p in pdf_paths],
+        "sec_result": {
+            "dashes_acc_num": sec_result.dashes_acc_num,
+            "form_name": sec_result.form_name,
+            "filing_date": sec_result.filing_date,
+            "report_date": sec_result.report_date,
+            "primary_document": sec_result.primary_document,
+        },
+        "pdf_path": str(pdf_path),
+    }
+
+
+class SecMainToMarkdownRequest(BaseModel):
+    ticker: str
+    year: str
+    filing_type: str = "10-K"
+
+
+@app.post("/sec_main_to_markdown")
+async def sec_main_to_markdown_endpoint(request: SecMainToMarkdownRequest):
+    payload = await sec_main_to_markdown(
+        ticker=request.ticker,
+        year=request.year,
+        filing_type=request.filing_type,
+    )
+    sec_result = payload["sec_result"]
+    return {
+        "sec_result": {
+            "dashes_acc_num": sec_result.dashes_acc_num,
+            "form_name": sec_result.form_name,
+            "filing_date": sec_result.filing_date,
+            "report_date": sec_result.report_date,
+            "primary_document": sec_result.primary_document,
+        },
+        "pdf_path": str(payload["pdf_path"]),
+        "markdown_path": str(payload["markdown_path"]),
+        "markdown": payload["markdown_text"],
+    }
+
+
+class SecMainToMarkdownEmbedRequest(BaseModel):
+    ticker: str
+    year: str
+    filing_type: str = "10-K"
+    force: bool = False
+
+
+@app.post("/sec_main_to_markdown_and_embed")
+async def sec_main_to_markdown_and_embed_endpoint(
+    request: SecMainToMarkdownEmbedRequest,
+):
+    payload = await sec_main_to_markdown_and_embed(
+        ticker=request.ticker,
+        year=request.year,
+        filing_type=request.filing_type,
+        force=request.force,
+    )
+    sec_result = payload["sec_result"]
+    return {
+        "sec_result": {
+            "dashes_acc_num": sec_result.dashes_acc_num,
+            "form_name": sec_result.form_name,
+            "filing_date": sec_result.filing_date,
+            "report_date": sec_result.report_date,
+            "primary_document": sec_result.primary_document,
+        },
+        "pdf_path": str(payload["pdf_path"]),
+        "markdown_path": str(payload["markdown_path"]),
+        "embedded": payload["embedded"],
     }
 
 
@@ -168,7 +243,7 @@ def embed_sec_filings(request: SecFilingsEmbedRequest):
 @app.post("/vector_store/embed_transcripts")
 def embed_transcripts(request: TranscriptEmbedRequest):
     try:
-        keys = vector_index.from_earnings_transcript_jsonl(
+        keys = vector_index.from_earnings_transcript_markdown(
             request.ticker,
             request.year,
             force=request.force,

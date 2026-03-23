@@ -4,7 +4,6 @@ import argparse
 import asyncio
 import datetime
 import dataclasses
-import json
 import re
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -38,29 +37,96 @@ class Transcript:
     date: str
     speaker_texts: list[SpeakerText]
 
+    def to_markdown(self) -> str:
+        """Format the transcript as markdown with parseable speaker tags."""
+        quarter_label = f"Q{self.quarter_num}"
+        date_display = self.date.strip() or "—"
+        parts: list[str] = [
+            f"# {self.ticker} · {self.year} · {quarter_label}",
+            "",
+            f"**Date:** {date_display}",
+            "",
+            "---",
+            "",
+            "## Transcript",
+            "",
+        ]
+        for block in self.speaker_texts:
+            speaker = block.speaker.strip() or "(Unknown speaker)"
+            body = block.text.strip() or "_(empty)_"
+            parts.extend(
+                [
+                    "<speaker-start>",
+                    f"### {speaker}",
+                    "",
+                    body,
+                    "<speaker-end>",
+                    "",
+                ]
+            )
+        return "\n".join(parts).rstrip() + "\n"
+
     @classmethod
-    def from_file(cls, jsonl_path: str | Path) -> "Transcript":
-        path = Path(jsonl_path)
+    def from_markdown(cls, markdown_path: str | Path) -> "Transcript":
+        path = Path(markdown_path)
         text = path.read_text(encoding="utf-8").strip()
         if not text:
             raise ValueError(f"Empty transcript file: {path}")
+
+        filename_match = re.fullmatch(
+            r"Q(?P<quarter>[1-4])(?:_(?P<date>\d{4}-\d{2}-\d{2}))?\.md",
+            path.name,
+            flags=re.IGNORECASE,
+        )
+        if not filename_match:
+            raise ValueError(
+                f"Invalid transcript filename {path.name!r}; expected "
+                f"'Q1_YYYY-MM-DD.md' (date optional)."
+            )
+
         try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            first = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
-            data = json.loads(first)
-        utterances = [SpeakerText(**row) for row in data["speaker_texts"]]
+            year = int(path.parent.name)
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid transcript year directory {path.parent.name!r} for {path}."
+            ) from exc
+
+        ticker = path.parent.parent.name
+
+        block_matches = re.findall(
+            r"<speaker-start>\s*###\s*(.*?)\n(.*?)<speaker-end>",
+            text,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        if not block_matches:
+            raise ValueError(f"Missing transcript speaker blocks in markdown: {path}")
+
+        utterances = [
+            SpeakerText(speaker=speaker.strip(), text=body.strip())
+            for speaker, body in block_matches
+        ]
+
         return cls(
-            ticker=data["ticker"],
-            year=int(data["year"]),
-            quarter_num=int(data["quarter_num"]),
-            date=data["date"],
+            ticker=ticker,
+            year=year,
+            quarter_num=int(filename_match.group("quarter")),
+            date=filename_match.group("date") or "",
             speaker_texts=utterances,
         )
 
 
 class TranscriptUrlDoesNotExistError(Exception):
     pass
+
+
+def quarter_label_to_num(quarter: str) -> int:
+    """Parse a quarter label (e.g. ``Q1``, ``q2``, ``Q 3``) into 1–4."""
+    match = re.fullmatch(r"\s*Q\s*([1-4])\s*", quarter.strip(), flags=re.IGNORECASE)
+    if not match:
+        raise ValueError(
+            f"Invalid quarter label {quarter!r}; expected Q1, Q2, Q3, or Q4"
+        )
+    return int(match.group(1))
 
 
 def _make_url(ticker: str, year: int, quarter_num: int) -> str:
@@ -175,17 +241,48 @@ def _parse_speaker_texts(soup: BeautifulSoup) -> list[SpeakerText]:
     return speaker_texts
 
 
-def _write_transcript_jsonl(transcript: Transcript) -> Path:
+def save_transcript_markdown(transcript: Transcript) -> Path:
     out_dir = (
         Path(sec_settings.earnings_transcripts_dir)
         / transcript.ticker
         / str(transcript.year)
     )
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"Q{transcript.quarter_num}.jsonl"
+    date_suffix = transcript.date.strip() or "unknown-date"
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_suffix):
+        date_suffix = "unknown-date"
+    path = out_dir / f"Q{transcript.quarter_num}_{date_suffix}.md"
     with path.open("w", encoding="utf-8") as f:
-        f.write(json.dumps(dataclasses.asdict(transcript), ensure_ascii=False) + "\n")
+        f.write(transcript.to_markdown())
     return path
+
+
+def convert_transcript_jsonl_to_markdown(
+    jsonl_path: str | Path, *, delete_jsonl: bool = False
+) -> Path:
+    """Convert one transcript JSONL file into tagged markdown format."""
+    source_path = Path(jsonl_path)
+    text = source_path.read_text(encoding="utf-8").strip()
+    if not text:
+        raise ValueError(f"Empty transcript file: {source_path}")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        first = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+        data = json.loads(first)
+
+    transcript = Transcript(
+        ticker=data["ticker"],
+        year=int(data["year"]),
+        quarter_num=int(data["quarter_num"]),
+        date=data.get("date", ""),
+        speaker_texts=[SpeakerText(**row) for row in data["speaker_texts"]],
+    )
+    out_path = source_path.with_suffix(".md")
+    out_path.write_text(transcript.to_markdown(), encoding="utf-8")
+    if delete_jsonl:
+        source_path.unlink(missing_ok=True)
+    return out_path
 
 
 async def _load_transcript_with_new_page(
@@ -220,7 +317,7 @@ async def _load_transcript_with_new_page(
             date=date_iso,
             speaker_texts=speaker_texts,
         )
-        _write_transcript_jsonl(transcript)
+        save_transcript_markdown(transcript)
         return transcript
     finally:
         await page.close()
@@ -274,27 +371,27 @@ async def _fetch_one_quarter(
     return None
 
 
-async def get_transcripts_for_year_async(
+async def get_transcript_for_quarter_async(
     ticker: str,
     year: int,
-    max_concurrency: int = 3,
-) -> list[Transcript]:
+    quarter: str,
+) -> Transcript | None:
+    """Fetch a single earnings-call transcript for one fiscal quarter.
+
+    ``quarter`` must be a label such as ``Q1``, ``Q2``, ``Q3``, or ``Q4``
+    (case-insensitive; optional spaces after ``Q``).
+    """
+    quarter_num = quarter_label_to_num(quarter)
     async with async_playwright() as playwright:
         browser, context = await _new_browser_context(playwright)
         try:
-            semaphore = asyncio.Semaphore(max_concurrency)
-            tasks = [
-                _fetch_one_quarter(context, semaphore, ticker, year, quarter_num)
-                for quarter_num in (1, 2, 3, 4)
-            ]
-            results = await asyncio.gather(*tasks)
+            semaphore = asyncio.Semaphore(1)
+            return await _fetch_one_quarter(
+                context, semaphore, ticker, year, quarter_num
+            )
         finally:
             await context.close()
             await browser.close()
-
-    transcripts = [item for item in results if item is not None]
-    transcripts.sort(key=lambda item: item.quarter_num)
-    return transcripts
 
 
 def _parse_args() -> argparse.Namespace:
@@ -315,31 +412,51 @@ def _parse_args() -> argparse.Namespace:
         help="Fiscal year (default: current year - 1)",
     )
     parser.add_argument(
-        "--max-concurrency",
-        type=int,
-        default=4,
-        help="Max number of concurrent quarter fetches",
+        "--quarter",
+        type=str,
+        default="Q4",
+        metavar="QX",
+        help="Quarter label: Q1, Q2, Q3, or Q4 (case-insensitive). "
+        "If omitted, fetches Q1–Q4 sequentially.",
     )
     return parser.parse_args()
 
 
+async def _fetch_single_quarter(
+    ticker: str, year: int, quarter: str
+) -> Transcript | None:
+    """Fetch transcript for a single quarter, or None if unavailable."""
+    return await get_transcript_for_quarter_async(ticker, year, quarter)
+
+
 def _main(args: argparse.Namespace) -> None:
-    logger.info("Fetching transcripts for ticker={} year={}", args.ticker, args.year)
-    transcripts = asyncio.run(
-        get_transcripts_for_year_async(
-            args.ticker,
-            args.year,
-            max_concurrency=args.max_concurrency,
+    logger.info(
+        "Fetching transcript for ticker={} year={} quarter={}".format(
+            args.ticker, args.year, args.quarter
         )
     )
-    for item in transcripts:
-        logger.info(
-            "Got Q{} date={} speaker_blocks={}",
-            item.quarter_num,
-            item.date or "(none)",
-            len(item.speaker_texts),
+    if args.quarter is None:
+        raise SystemExit(
+            "Please provide a quarter using --quarter (e.g., Q1, Q2, Q3, Q4)"
         )
-    logger.info("Done: {} quarter(s) loaded", len(transcripts))
+    try:
+        quarter_label_to_num(args.quarter)
+    except ValueError as exc:
+        raise SystemExit(f"error: {exc}") from exc
+
+    transcript = asyncio.run(
+        _fetch_single_quarter(args.ticker, args.year, args.quarter)
+    )
+    if transcript is None:
+        logger.warning("No transcript found for the specified period")
+        return
+    logger.info(
+        "Got Q{} date={} speaker_blocks={}",
+        transcript.quarter_num,
+        transcript.date or "(none)",
+        len(transcript.speaker_texts),
+    )
+    logger.info("Done: 1 quarter loaded")
 
 
 if __name__ == "__main__":

@@ -1,50 +1,194 @@
 from __future__ import annotations
 
-import dataclasses
-import mimetypes
+import json
 from pathlib import Path
+from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 
-from earnings_transcripts.transcripts import get_transcripts_for_year_async
-from filings.sec_data import sec_main
+from earnings_transcripts.transcripts import (
+    get_transcript_for_quarter_async,
+    save_transcript_markdown,
+)
+from dataloader.text_splitter import Chunk
+from dataloader.vector_store import ChromaVectorStore
+from mcp.server.transport_security import TransportSecuritySettings
+from filings.sec_data import (
+    sec_main_to_markdown_and_embed,
+)
 from filings.utils import company_to_ticker
 from settings import sec_settings
 
-mcp = FastMCP("sec-filings-data")
+_vector_index: ChromaVectorStore | None = None
+_RESOURCE_HINT = (
+    "If the exact file is missing, generate and embed it with "
+    "`sec_main_to_markdown_and_embed_tool` (SEC filings) or "
+    "`earnings_transcript_for_quarter_tool` (transcripts + embeddings)."
+)
 
 
-def _resolve_path(path: str) -> Path:
-    """Resolve a path string to an absolute path."""
-    return Path(path).expanduser().resolve()
-
-
-def _allowed_roots() -> list[Path]:
-    """Return the main data roots this MCP server exposes."""
+def _mcp_transport_allowed_hosts() -> list[str]:
     return [
-        Path(sec_settings.sec_data_dir).resolve(),
-        Path(sec_settings.earnings_transcripts_dir).resolve(),
+        f"{sec_settings.mcp_host}:*",
+        "localhost:*",
+        *sec_settings.mcp_ngrok_allowed_hosts,
     ]
 
 
-def _is_under(path: Path, root: Path) -> bool:
-    """Return whether ``path`` is within ``root``."""
-    try:
-        path.relative_to(root)
-        return True
-    except ValueError:
-        return False
+mcp = FastMCP(
+    "sec-filings-data",
+    host=sec_settings.mcp_host,
+    port=sec_settings.mcp_port,
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=_mcp_transport_allowed_hosts(),
+    ),
+)
 
 
-def _is_allowed_path(path: Path) -> bool:
-    """Allow access only to known data roots."""
-    return any(_is_under(path, root) for root in _allowed_roots())
+def _get_vector_index() -> ChromaVectorStore:
+    """Return a lazily initialized Chroma vector index client."""
+    global _vector_index
+    if _vector_index is None:
+        _vector_index = ChromaVectorStore()
+    return _vector_index
+
+
+def _sec_pdf_root() -> Path:
+    return Path(sec_settings.sec_data_dir)
+
+
+def _transcript_root() -> Path:
+    return Path(sec_settings.earnings_transcripts_dir)
+
+
+def _list_relative_files(root: Path, pattern: str) -> list[str]:
+    if not root.exists():
+        return []
+    return sorted(
+        str(path.relative_to(root)) for path in root.glob(pattern) if path.is_file()
+    )
+
+
+def _directory_tree(root: Path) -> str:
+    """Render a human-readable tree where leaves are files under ``root``."""
+    if not root.exists():
+        return f"{root} (missing)"
+
+    lines = [str(root)]
+    entries = sorted(
+        root.rglob("*"), key=lambda p: (len(p.relative_to(root).parts), str(p))
+    )
+    for entry in entries:
+        depth = len(entry.relative_to(root).parts)
+        indent = "  " * depth
+        suffix = "/" if entry.is_dir() else ""
+        lines.append(f"{indent}- {entry.name}{suffix}")
+    return "\n".join(lines)
+
+
+def _sec_resources_payload() -> dict[str, object]:
+    root = _sec_pdf_root()
+    return {
+        "resource_kind": "sec_filings",
+        "base_dir": str(root),
+        "directory_structure_format": (
+            "Tree format uses `- <name>/` for directories and `- <name>` for files. "
+            "Indentation is two spaces per depth level below `base_dir`."
+        ),
+        "expected_layout": "{SEC_DATA_DIR}/{TICKER}-{YEAR}/{FILING_TYPE}.pdf",
+        "pdf_files": _list_relative_files(root, "**/*.pdf"),
+        "directory_structure": _directory_tree(root),
+        "hint": _RESOURCE_HINT,
+    }
+
+
+def _transcript_resources_payload() -> dict[str, object]:
+    root = _transcript_root()
+    return {
+        "resource_kind": "earnings_transcripts",
+        "base_dir": str(root),
+        "directory_structure_format": (
+            "Tree format uses `- <name>/` for directories and `- <name>` for files. "
+            "Indentation is two spaces per depth level below `base_dir`."
+        ),
+        "expected_layout": "{EARNINGS_TRANSCRIPTS_DIR}/{TICKER}/{YEAR}/Q{N}_{YYYY-MM-DD}.md",
+        "transcript_files": _list_relative_files(root, "**/*.md"),
+        "directory_structure": _directory_tree(root),
+        "hint": _RESOURCE_HINT,
+    }
+
+
+def _all_resources_payload() -> dict[str, object]:
+    return {
+        "resources": [
+            _sec_resources_payload(),
+            _transcript_resources_payload(),
+        ]
+    }
+
+
+@mcp.resource(
+    "resource://sec-filings-data/resources/all",
+    name="All SEC resources",
+    description=(
+        "Lists SEC filing PDFs and transcript markdown files from configured paths, "
+        "including directory structure and generation hints."
+    ),
+)
+def all_resources_catalog() -> str:
+    """List all available SEC/transcript resources based on ``settings.py`` paths."""
+    return json.dumps(_all_resources_payload(), indent=2)
+
+
+@mcp.resource(
+    "resource://sec-filings-data/resources/sec-filings",
+    name="SEC filing resources",
+    description=(
+        "Lists SEC filing PDF resources and directory structure rooted at "
+        "`settings.sec_data_dir`."
+    ),
+)
+def sec_filings_resource_catalog() -> str:
+    """List SEC filing PDFs with directory structure from ``settings.sec_data_dir``.
+
+    Directory tree format:
+    - ``- <name>/`` denotes a directory.
+    - ``- <name>`` denotes a file.
+    - Two-space indentation denotes each directory depth.
+    """
+    return json.dumps(_sec_resources_payload(), indent=2)
+
+
+@mcp.resource(
+    "resource://sec-filings-data/resources/transcripts",
+    name="Transcript resources",
+    description=(
+        "Lists earnings transcript markdown resources and directory structure rooted at "
+        "`settings.earnings_transcripts_dir`."
+    ),
+)
+def transcripts_resource_catalog() -> str:
+    """List transcript markdown files with directory structure from transcript settings.
+
+    Directory tree format:
+    - ``- <name>/`` denotes a directory.
+    - ``- <name>`` denotes a file.
+    - Two-space indentation denotes each directory depth.
+    """
+    return json.dumps(_transcript_resources_payload(), indent=2)
 
 
 @mcp.tool()
 def company_name_to_ticker_tool(name: str) -> dict[str, str]:
     """Resolve a company name to its stock ticker symbol.
-
+    Usage guidance:
+      - Use this when a user gives only a company name (for example
+        "Amazon" or "Alphabet") and downstream tools require a ticker.
+      - Skip this when the user already provided a valid ticker symbol.
+      - If you already know the ticker from prior knowledge or prior steps, do not call
+        this tool.
+      - Call this once per company and reuse the returned ticker.
     Args:
         name: Full or partial company name to resolve.
     """
@@ -55,140 +199,148 @@ def company_name_to_ticker_tool(name: str) -> dict[str, str]:
 
 
 @mcp.tool()
-async def earnings_transcripts_for_year_tool(ticker: str, year: int) -> list[dict]:
-    """Fetch earnings-call transcripts for a ticker and year.
-
-    Args:
-        ticker: Equity ticker symbol, for example ``"AMZN"``.
-        year: Four-digit year to fetch transcript quarters from.
-    """
-    transcripts = await get_transcripts_for_year_async(ticker, year)
-    return [dataclasses.asdict(t) for t in transcripts]
-
-
-@mcp.tool()
-async def sec_main_tool(
+async def earnings_transcript_for_quarter_tool(
     ticker: str,
-    year: str,
-    filing_types: list[str] | None = None,
-    include_amends: bool = True,
-) -> dict:
-    """Fetch SEC filings and persist PDFs under the configured SEC data directory.
+    year: int,
+    quarter: Literal["Q1", "Q2", "Q3", "Q4"],
+) -> dict[str, object]:
+    """Fetch one earnings-call transcript, save markdown, and embed it.
 
     Args:
         ticker: Equity ticker symbol, for example ``"AMZN"``.
-        year: Filing year, typically a four-digit string.
-        filing_types: SEC form types to request, such as ``["10-K", "10-Q"]``.
-        include_amends: Whether amended forms (for example ``10-K/A``) are included.
+        year: Four-digit fiscal year.
+        quarter: Fiscal quarter label ``Q1``, ``Q2``, ``Q3``, or ``Q4``.
     """
-    effective_filing_types = filing_types or ["10-K", "10-Q"]
-    sec_results, pdf_paths = await sec_main(
-        ticker=ticker,
-        year=year,
-        filing_types=effective_filing_types,
-        include_amends=include_amends,
+    transcript = await get_transcript_for_quarter_async(ticker, year, quarter)
+    if transcript is None:
+        raise ValueError(
+            f"No transcript available for ticker={ticker} year={year} {quarter}"
+        )
+    markdown_path = save_transcript_markdown(transcript)
+    embedded_keys = _get_vector_index().from_earnings_transcript_markdown(
+        ticker=ticker, year=str(year), transcript_paths=[markdown_path], force=False
     )
     return {
-        "sec_results": [
-            {
-                "dashes_acc_num": r.dashes_acc_num,
-                "form_name": r.form_name,
-                "filing_date": r.filing_date,
-                "report_date": r.report_date,
-                "primary_document": r.primary_document,
-            }
-            for r in sec_results
+        "ticker": ticker,
+        "year": year,
+        "quarter": quarter,
+        "markdown_path": str(markdown_path),
+        "embedded": [
+            {"ticker": key.ticker, "year": key.year, "filing_type": key.filing_type}
+            for key in embedded_keys
         ],
-        "pdf_paths": [str(p) for p in pdf_paths],
     }
 
 
 @mcp.tool()
-def list_data_roots_tool() -> list[dict[str, str]]:
-    """List root directories exposed for file exploration."""
-    return [{"path": str(root)} for root in _allowed_roots()]
+def list_resources_tool() -> dict[str, object]:
+    """Return all SEC/transcript file resources and directory structures.
+
+    Notes:
+    - SEC filings are discovered from ``settings.sec_data_dir`` and reported as PDFs.
+    - Earnings transcripts are discovered from ``settings.earnings_transcripts_dir``
+      and reported as markdown files.
+    - If a file is missing, use ``sec_main_to_markdown_and_embed_tool`` or
+      ``earnings_transcript_for_quarter_tool`` to generate + embed data.
+    """
+    return _all_resources_payload()
 
 
 @mcp.tool()
-def list_data_files_tool(
-    path: str, pattern: str = "**/*", limit: int = 200
-) -> list[dict]:
-    """List files under an allowed directory.
+async def sec_main_to_markdown_and_embed_tool(
+    ticker: str,
+    year: str,
+    filing_type: str = "10-K",
+) -> dict:
+    """Download one SEC filing PDF (if needed), OCR to markdown (if needed), and embed markdown.
 
     Args:
-        path: Absolute or relative directory path to scan.
-        pattern: Glob pattern, e.g. ``**/*.pdf`` or ``**/*.jsonl``.
-        limit: Maximum number of records returned.
+        ticker: Equity ticker symbol, for example ``"GOOG"`` or ``"AMZN"``.
+        year: Filing year as a string (four digits), matching the SEC filing period.
+        filing_type: Form or period key to fetch, for example ``"10-K"`` or ``"10-Q1"``
+            through ``"10-Q3"`` for quarterly reports.
     """
-    base = _resolve_path(path)
-    if not base.exists() or not base.is_dir():
-        raise FileNotFoundError(f"Directory not found: {base}")
-    if not _is_allowed_path(base):
-        raise ValueError(f"Path is not within allowed data roots: {base}")
-
-    files: list[dict] = []
-    for candidate in sorted(base.glob(pattern)):
-        if not candidate.exists() or not candidate.is_file():
-            continue
-        files.append(
-            {
-                "path": str(candidate),
-                "name": candidate.name,
-                "suffix": candidate.suffix.lower(),
-                "size_bytes": candidate.stat().st_size,
-                "mime_type": mimetypes.guess_type(candidate.name)[0]
-                or "application/octet-stream",
-            }
-        )
-        if len(files) >= limit:
-            break
-
-    return files
-
-
-@mcp.tool()
-def read_data_file_tool(path: str, max_bytes: int = 200_000) -> dict:
-    """Read a file under the exposed data roots.
-
-    Text-like files return UTF-8 content (with replacement for invalid bytes).
-    Binary files return base metadata and a short hex preview.
-
-    Args:
-        path: Absolute or relative file path under an allowed root.
-        max_bytes: Maximum number of bytes read from the file.
-    """
-    file_path = _resolve_path(path)
-    if not file_path.exists() or not file_path.is_file():
-        raise FileNotFoundError(f"File not found: {file_path}")
-    if not _is_allowed_path(file_path):
-        raise ValueError(f"Path is not within allowed data roots: {file_path}")
-
-    mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-    raw = file_path.read_bytes()[:max_bytes]
-
-    if mime_type.startswith("text/") or file_path.suffix.lower() in {
-        ".json",
-        ".jsonl",
-        ".md",
-        ".txt",
-        ".csv",
-        ".yaml",
-        ".yml",
-    }:
-        return {
-            "path": str(file_path),
-            "mime_type": mime_type,
-            "truncated": file_path.stat().st_size > len(raw),
-            "content": raw.decode("utf-8", errors="replace"),
-        }
-
+    payload = await sec_main_to_markdown_and_embed(
+        ticker=ticker,
+        year=year,
+        filing_type=filing_type,
+        force=False,
+    )
+    sec_result = payload["sec_result"]
     return {
-        "path": str(file_path),
-        "mime_type": mime_type,
-        "truncated": file_path.stat().st_size > len(raw),
-        "hex_preview": raw[:256].hex(),
+        "sec_result": {
+            "dashes_acc_num": sec_result.dashes_acc_num,
+            "form_name": sec_result.form_name,
+            "filing_date": sec_result.filing_date,
+            "report_date": sec_result.report_date,
+            "primary_document": sec_result.primary_document,
+        },
+        "pdf_path": str(payload["pdf_path"]),
+        "markdown_path": str(payload["markdown_path"]),
+        "embedded": payload["embedded"],
     }
+
+
+@mcp.tool()
+def search_sec_filings_tool(
+    ticker: str,
+    year: str,
+    filing_type: str,
+    query: str,
+    top_k: int = 5,
+) -> str:
+    """Run semantic search over one indexed SEC filing.
+
+    Args:
+        ticker: Equity ticker symbol, for example ``"AMZN"``.
+        year: Filing year.
+        filing_type: Indexed filing key, such as ``"10-K"`` or ``"10-Q1"``.
+        query: Natural-language search query.
+        top_k: Maximum number of chunks to return.
+    """
+    results = _get_vector_index().search(
+        ticker=ticker,
+        year=year,
+        filing_type=filing_type,
+        query=query,
+        top_k=top_k,
+    )
+    return "\n\n".join([chunk.text for chunk, _ in results])
+
+
+@mcp.tool()
+def search_transcripts_tool(ticker: str, year: str, query: str, top_k: int = 5) -> str:
+    """Run semantic search across all indexed transcript quarters.
+
+    Args:
+        ticker: Equity ticker symbol, for example ``"AMZN"``.
+        year: Transcript year.
+        query: Natural-language search query.
+        top_k: Maximum number of chunks to return after quarter-level merging.
+    """
+    year_s = str(year).strip()
+    vector_index = _get_vector_index()
+    resolved = vector_index.resolve_transcript_quarters(ticker, year_s)
+    if not resolved:
+        raise FileNotFoundError("No transcript indexes (Q1–Q4) for this ticker/year.")
+
+    ticker_key, quarters = resolved
+    merged: list[tuple[Chunk, float, str]] = []
+    for filing_type in quarters:
+        hits = vector_index.search(
+            ticker=ticker_key,
+            year=year_s,
+            filing_type=filing_type,
+            query=query,
+            top_k=top_k,
+        )
+        for chunk, score in hits:
+            merged.append((chunk, score, filing_type))
+
+    merged.sort(key=lambda item: -item[1])
+    merged = merged[:top_k]
+    return "\n\n".join([chunk.text for chunk, _, _ in merged])
 
 
 if __name__ == "__main__":
-    mcp.run()
+    mcp.run(transport="streamable-http")

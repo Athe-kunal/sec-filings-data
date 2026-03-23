@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from filings.sec_data import (
@@ -17,18 +18,24 @@ from .repl_env import MarkdownReplEnvironment, markdown_to_repl_env
 
 def _matches_filing_type(sec_result: SecResults, filing_type: str) -> bool:
     """Return True if sec_result matches the requested filing type."""
-    if filing_type == "10-K":
-        return sec_result.form_name == "10-K"
-    if filing_type == "10-Q":
+    ft = filing_type.strip().upper().replace(" ", "")
+    if ft == "10-K":
+        fn = sec_result.form_name
+        return fn == "10-K" or fn.startswith("10-K-")
+    q_match = re.fullmatch(r"10-Q([1-3])", ft)
+    if q_match:
+        base = f"10-Q{q_match.group(1)}"
+        name = sec_result.form_name
+        return name == base or name.startswith(f"{base}-")
+    if ft == "10-Q":
         return sec_result.form_name.startswith("10-Q")
-    return sec_result.form_name == filing_type
+    return sec_result.form_name.upper().replace(" ", "") == ft
 
 
 async def ensure_sec_data(
     ticker: str,
     year: str,
-    filing_types: list[str],
-    include_amends: bool = True,
+    filing_type: str,
 ) -> tuple[list[SecResults], list[Path]]:
     """
     Ensure SEC filing PDFs exist locally. Download only missing files.
@@ -36,21 +43,16 @@ async def ensure_sec_data(
     PDFs are stored in sec_data/{ticker}-{year}/ (per filings.sec_data).
 
     Returns:
-        (sec_results matching filing_types, paths to all PDFs)
+        (sec_results matching filing_type, paths to all PDFs)
     """
     sec_results = get_sec_results(
         ticker=ticker,
         year=year,
-        filing_types=filing_types,
-        include_amends=include_amends,
+        filing_type=filing_type,
     )
     output_dir = Path("sec_data") / f"{ticker}-{year}"
 
-    filtered = [
-        sr
-        for sr in sec_results
-        if any(_matches_filing_type(sr, ft) for ft in filing_types)
-    ]
+    filtered = [sr for sr in sec_results if _matches_filing_type(sr, filing_type)]
     existing_paths: list[Path] = []
     missing_results: list[SecResults] = []
     for sr in filtered:
@@ -77,7 +79,6 @@ async def prepare_sec_filing_envs(
     ticker: str,
     year: str,
     filing_type: str,
-    include_amends: bool = True,
     workspace: str | Path | None = None,
 ) -> list[MarkdownReplEnvironment]:
     """
@@ -86,8 +87,7 @@ async def prepare_sec_filing_envs(
     Args:
         ticker: Stock ticker symbol (e.g. "GOOG", "AAPL").
         year: Filing year (e.g. "2025").
-        filing_type: One of "10-K" or "10-Q".
-        include_amends: Include amended filings.
+        filing_type: ``10-K``, ``10-Q`` (all quarters), or ``10-Q1`` / ``10-Q2`` / ``10-Q3``.
         workspace: olmOCR workspace (default from settings). Markdown is written
             to workspace/markdown/sec_data/{ticker}-{year}/...
 
@@ -97,12 +97,10 @@ async def prepare_sec_filing_envs(
     workspace_str = str(workspace or sec_settings.olmocr_workspace)
     pdf_dir_str = f"sec_data/{ticker}-{year}"
 
-    filing_types = [filing_type]
     sec_results, _pdf_paths = await ensure_sec_data(
         ticker=ticker,
         year=year,
-        filing_types=filing_types,
-        include_amends=include_amends,
+        filing_type=filing_type,
     )
     if not sec_results:
         return []
