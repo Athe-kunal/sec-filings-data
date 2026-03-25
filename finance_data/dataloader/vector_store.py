@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple, Sequence
 
+from chromadb.types import Metadata
+
 import chromadb
 import numpy as np
 from chromadb.api.models.Collection import Collection
@@ -204,7 +206,7 @@ class ChromaVectorStore:
             self._collection.delete(ids=existing_ids)
 
         ids: list[str] = []
-        metadatas: list[dict] = []
+        metadatas: list[Metadata] = []
         documents: list[str] = []
         for i, chunk in enumerate(chunks):
             chunk_id = f"{ticker}:{year}:{filing_type}:{i}"

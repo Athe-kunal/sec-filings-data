@@ -33,6 +33,10 @@ mcp = [
     "fastmcp>=3.1.1",
     "mcp[cli]>=1.26.0",
 ]
+dev = [
+    "black>=24",
+    "ty>=0.0.1",
+]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
@@ -43,3 +47,8 @@ py-modules = ["mcp_server", "server", "settings"]
 
 [tool.setuptools.packages.find]
 include = ["finance_data*"]
+
+[tool.black]
+line-length = 88
+target-version = ["py311", "py312", "py313"]
+extend-exclude = "/(\\.venv|build|dist|.*\\.egg-info)/"

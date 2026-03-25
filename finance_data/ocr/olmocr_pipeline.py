@@ -1483,9 +1483,10 @@ async def run_olmo_ocr(
 
 
 if __name__ == "__main__":
+    import argparse
     import asyncio
 
-    import argparse
+    from finance_data.filings.sec_data import sec_data_case_dir
 
     parser = argparse.ArgumentParser(description="Run OLM OCR Pipeline")
 

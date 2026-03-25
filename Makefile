@@ -76,3 +76,14 @@ docker-stop:
 .PHONY: docker-remove
 docker-remove:
 	docker ps -aq --filter "publish=$(API_PORT)" | xargs -r docker rm
+
+# Dev: Black reformats sources; ty needs ocr-md + mcp so third-party imports resolve.
+.PHONY: lint
+lint:
+	uv run --group dev black .
+	uv run --group dev --group ocr-md --group mcp ty check .
+
+.PHONY: lint-check
+lint-check:
+	uv run --group dev black --check .
+	uv run --group dev --group ocr-md --group mcp ty check .
