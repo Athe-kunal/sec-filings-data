@@ -6,17 +6,17 @@ from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 
-from earnings_transcripts.transcripts import (
+from finance_data.earnings_transcripts.transcripts import (
     get_transcript_for_quarter_async,
     save_transcript_markdown,
 )
-from dataloader.text_splitter import Chunk
-from dataloader.vector_store import ChromaVectorStore
+from finance_data.dataloader.text_splitter import Chunk
+from finance_data.dataloader.vector_store import ChromaVectorStore
 from mcp.server.transport_security import TransportSecuritySettings
-from filings.sec_data import (
+from finance_data.filings.sec_data import (
     sec_main_to_markdown_and_embed,
 )
-from filings.utils import company_to_ticker
+from finance_data.filings.utils import company_to_ticker
 from settings import sec_settings
 
 _vector_index: ChromaVectorStore | None = None

@@ -1,3 +1,7 @@
+## Repository layout
+- **`finance_data/`** — library package: `filings/` (SEC download + helpers), `ocr/` (olmOCR pipeline), `dataloader/` (chunking, Chroma), `earnings_transcripts/`, `server_api/` (FastAPI models and batch helpers), `finance_data_api/` (packaged CLI entry only).
+- **Repo root** — `server.py` (FastAPI app), `mcp_server.py` (MCP entrypoint), `settings.py` (shared env/settings). These top-level modules are listed in `pyproject.toml` alongside the `finance_data*` packages.
+
 ## Dev environment tips
 - This repository is Python-first and uses `uv` for environment and dependency management.
 - Run `uv sync` for the default development environment.
@@ -12,9 +16,9 @@
   - `uv run python -m compileall .`
 - If you modify API/server logic, verify imports:
   - `uv run python -c "import server"`
-  - `uv run python -c "import finance_data.api"`
+  - `uv run python -c "import finance_data.server_api.models"`
 - If you modify SEC download or OCR pipelines, verify module imports:
-  - `uv run python -c "import filings.sec_data, ocr.olmocr_pipeline"`
+  - `uv run python -c "import finance_data.filings.sec_data, finance_data.ocr.olmocr_pipeline"`
 - If you modify MCP workflows, verify the MCP server imports:
   - `uv run --group ocr-md --group mcp python -c "import mcp_server"`
 - Add or update tests when behavior changes.

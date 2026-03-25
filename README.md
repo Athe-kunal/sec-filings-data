@@ -178,13 +178,15 @@ pip install finance_data_llm
 Use package functions directly from Python (no server process required):
 
 ```python
-from finance_data import (
-    company_name_to_ticker,
-    fetch_sec_filings_sync,
-)
+import asyncio
 
-ticker = company_name_to_ticker("Amazon")
-filings = fetch_sec_filings_sync(ticker=ticker or "AMZN", year="2025")
+from finance_data.filings.sec_data import sec_main
+from finance_data.filings.utils import company_to_ticker
+
+ticker = company_to_ticker("Amazon") or "AMZN"
+sec_result, pdf_path = asyncio.run(
+    sec_main(ticker=ticker, year="2025", filing_type="10-K")
+)
 ```
 
 If you do want to run the API, use the packaged console script:
@@ -207,12 +209,12 @@ make guidellm-benchmark
 
 Fetch SEC filings:
 ```bash
-uv run python -m filings.sec_data --ticker AMZN --year 2025
+uv run python -m finance_data.filings.sec_data --ticker AMZN --year 2025
 ```
 
 Run OCR pipeline:
 ```bash
-uv run python ocr/olmocr_pipeline.py --pdf-dir sec_data/AMZN-2025
+uv run python -m finance_data.ocr.olmocr_pipeline --pdf-dir sec_data/AMZN-2025
 ```
 
 ## Earnings call transcripts
@@ -224,7 +226,7 @@ Transcripts are scraped from [discountingcashflows.com](https://discountingcashf
 **CLI** (writes files under `earnings_transcripts_data` by default):
 
 ```bash
-uv run python -m earnings_transcripts.transcripts AMZN 2025
+uv run python -m finance_data.earnings_transcripts.transcripts AMZN 2025
 ```
 
 Optional: `--max-concurrency` (default `4`) to limit parallel quarter fetches.

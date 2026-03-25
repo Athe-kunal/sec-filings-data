@@ -6,13 +6,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple, Sequence
 
+from chromadb.types import Metadata
+
 import chromadb
 import numpy as np
 from chromadb.api.models.Collection import Collection
 from openai import OpenAI
 
-from dataloader.text_splitter import Chunk, chunk_markdown
-from earnings_transcripts.transcripts import Transcript
+from finance_data.dataloader.text_splitter import Chunk, chunk_markdown
+from finance_data.earnings_transcripts.transcripts import Transcript
 from settings import sec_settings
 
 _log = logging.getLogger(__name__)
@@ -204,7 +206,7 @@ class ChromaVectorStore:
             self._collection.delete(ids=existing_ids)
 
         ids: list[str] = []
-        metadatas: list[dict] = []
+        metadatas: list[Metadata] = []
         documents: list[str] = []
         for i, chunk in enumerate(chunks):
             chunk_id = f"{ticker}:{year}:{filing_type}:{i}"

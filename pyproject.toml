@@ -1,9 +1,9 @@
 [project]
 name = "finance_data_llm"
-version = "0.1.2"
+version = "0.1.3"
 description = "SEC filings and Earnings call transcripts data"
 readme = "README.md"
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "fastapi>=0.115.0",
     "pydantic-settings>=2.6.0",
@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-finance-data-llm-server = "finance_data.cli:main"
+finance-data-llm-server = "finance_data.finance_data_api.cli:main"
 
 [dependency-groups]
 ocr-md = [
@@ -33,6 +33,10 @@ mcp = [
     "fastmcp>=3.1.1",
     "mcp[cli]>=1.26.0",
 ]
+dev = [
+    "black>=24",
+    "ty>=0.0.1",
+]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
@@ -42,11 +46,9 @@ build-backend = "setuptools.build_meta"
 py-modules = ["mcp_server", "server", "settings"]
 
 [tool.setuptools.packages.find]
-include = [
-    "dataloader*",
-    "earnings_transcripts*",
-    "filings*",
-    "finance_data*",
-    "ocr*",
-    "server_api*"
-]
+include = ["finance_data*"]
+
+[tool.black]
+line-length = 88
+target-version = ["py311", "py312", "py313"]
+extend-exclude = "/(\\.venv|build|dist|.*\\.egg-info)/"

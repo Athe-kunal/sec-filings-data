@@ -42,7 +42,6 @@ from olmocr.train.dataloader import FrontMatterParser
 from olmocr.version import VERSION
 from olmocr.work_queue import LocalBackend, WorkQueue
 
-from filings.sec_data import sec_data_case_dir
 from settings import sec_settings
 
 DEFAULT_SERVER = sec_settings.olmocr_server
@@ -1484,9 +1483,10 @@ async def run_olmo_ocr(
 
 
 if __name__ == "__main__":
+    import argparse
     import asyncio
 
-    import argparse
+    from finance_data.filings.sec_data import sec_data_case_dir
 
     parser = argparse.ArgumentParser(description="Run OLM OCR Pipeline")
 

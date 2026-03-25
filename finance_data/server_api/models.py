@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, field_validator
 
-from earnings_transcripts.transcripts import quarter_label_to_num
+from finance_data.earnings_transcripts.transcripts import quarter_label_to_num
 
 
 class CompanyNameRequest(BaseModel):

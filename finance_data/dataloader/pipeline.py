@@ -1,16 +1,17 @@
 """Pipeline to fetch SEC filings, run OCR, and prepare REPL environments."""
 
 from __future__ import annotations
+import asyncio
 
 import re
 from pathlib import Path
 
-from filings.sec_data import (
+from finance_data.filings.sec_data import (
     SecResults,
     get_sec_results,
     save_sec_results_as_pdfs,
 )
-from ocr.olmocr_pipeline import get_markdown_path, run_olmo_ocr
+from finance_data.ocr.olmocr_pipeline import get_markdown_path, run_olmo_ocr
 from settings import sec_settings
 
 from .repl_env import MarkdownReplEnvironment, markdown_to_repl_env
@@ -63,11 +64,22 @@ async def ensure_sec_data(
             missing_results.append(sr)
 
     if missing_results:
-        new_paths = await save_sec_results_as_pdfs(
-            sec_results=missing_results,
-            ticker=ticker,
-            year=year,
+        new_paths = await asyncio.gather(
+            *[
+                save_sec_results_as_pdfs(
+                    sec_result=sr,
+                    ticker=ticker,
+                    year=year,
+                )
+                for sr in missing_results
+            ]
         )
+        # Flatten the list of lists (one list per SecResults)
+        new_paths = [
+            item
+            for sublist in new_paths
+            for item in (sublist if isinstance(sublist, list) else [sublist])
+        ]
         pdf_paths = existing_paths + new_paths
     else:
         pdf_paths = existing_paths
