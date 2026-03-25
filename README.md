@@ -178,13 +178,15 @@ pip install finance_data_llm
 Use package functions directly from Python (no server process required):
 
 ```python
-from finance_data.finance_data import (
-    company_name_to_ticker,
-    fetch_sec_filings_sync,
-)
+import asyncio
 
-ticker = company_name_to_ticker("Amazon")
-filings = fetch_sec_filings_sync(ticker=ticker or "AMZN", year="2025")
+from finance_data.filings.sec_data import sec_main
+from finance_data.filings.utils import company_to_ticker
+
+ticker = company_to_ticker("Amazon") or "AMZN"
+sec_result, pdf_path = asyncio.run(
+    sec_main(ticker=ticker, year="2025", filing_type="10-K")
+)
 ```
 
 If you do want to run the API, use the packaged console script:
