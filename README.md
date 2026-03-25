@@ -178,7 +178,7 @@ pip install finance_data_llm
 Use package functions directly from Python (no server process required):
 
 ```python
-from finance_data import (
+from finance_data.finance_data import (
     company_name_to_ticker,
     fetch_sec_filings_sync,
 )
@@ -207,12 +207,12 @@ make guidellm-benchmark
 
 Fetch SEC filings:
 ```bash
-uv run python -m filings.sec_data --ticker AMZN --year 2025
+uv run python -m finance_data.filings.sec_data --ticker AMZN --year 2025
 ```
 
 Run OCR pipeline:
 ```bash
-uv run python ocr/olmocr_pipeline.py --pdf-dir sec_data/AMZN-2025
+uv run python -m finance_data.ocr.olmocr_pipeline --pdf-dir sec_data/AMZN-2025
 ```
 
 ## Earnings call transcripts
@@ -224,7 +224,7 @@ Transcripts are scraped from [discountingcashflows.com](https://discountingcashf
 **CLI** (writes files under `earnings_transcripts_data` by default):
 
 ```bash
-uv run python -m earnings_transcripts.transcripts AMZN 2025
+uv run python -m finance_data.earnings_transcripts.transcripts AMZN 2025
 ```
 
 Optional: `--max-concurrency` (default `4`) to limit parallel quarter fetches.

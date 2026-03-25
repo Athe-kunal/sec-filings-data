@@ -8,8 +8,10 @@ from typing import Any
 
 from loguru import logger
 
-from filings import utils
+from . import utils
 from settings import sec_settings
+from finance_data.ocr.olmocr_pipeline import get_markdown_path, run_olmo_ocr
+from finance_data.dataloader.vector_store import ChromaVectorStore, IndexKey
 
 
 def sec_data_case_dir(ticker: str, year: str) -> Path:
@@ -203,7 +205,6 @@ async def sec_main(
 
 def sec_markdown_path_for_pdf(pdf_path: str | Path) -> Path:
     """Resolve olmOCR markdown output path for a filing PDF path."""
-    from ocr.olmocr_pipeline import get_markdown_path
 
     return Path(get_markdown_path(sec_settings.olmocr_workspace, str(pdf_path)))
 
@@ -214,7 +215,6 @@ async def sec_main_to_markdown(
     filing_type: str = "10-K",
 ) -> dict[str, Any]:
     """Ensure one SEC filing is downloaded and OCR markdown exists, then return markdown."""
-    from ocr.olmocr_pipeline import run_olmo_ocr
 
     sec_result, pdf_path = await sec_main(
         ticker=ticker,
@@ -245,7 +245,6 @@ async def sec_main_to_markdown_and_embed(
     force: bool = False,
 ) -> dict[str, Any]:
     """Ensure SEC filing markdown exists, then embed it into ChromaDB."""
-    from dataloader.vector_store import ChromaVectorStore, IndexKey
 
     payload = await sec_main_to_markdown(
         ticker=ticker,

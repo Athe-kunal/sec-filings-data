@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import functools
 
-from filings.sec_data import SecResults
+from finance_data.filings.sec_data import SecResults
 
 
 @dataclass
@@ -54,7 +54,7 @@ def markdown_to_repl_env(
 if __name__ == "__main__":
     import asyncio
 
-    from dataloader.pipeline import prepare_sec_filing_envs
+    from finance_data.dataloader.pipeline import prepare_sec_filing_envs
 
     envs = asyncio.run(
         prepare_sec_filing_envs(

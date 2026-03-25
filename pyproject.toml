@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-finance-data-llm-server = "finance_data.cli:main"
+finance-data-llm-server = "finance_data.finance_data.cli:main"
 
 [dependency-groups]
 ocr-md = [
@@ -42,11 +42,4 @@ build-backend = "setuptools.build_meta"
 py-modules = ["mcp_server", "server", "settings"]
 
 [tool.setuptools.packages.find]
-include = [
-    "dataloader*",
-    "earnings_transcripts*",
-    "filings*",
-    "finance_data*",
-    "ocr*",
-    "server_api*"
-]
+include = ["finance_data*"]

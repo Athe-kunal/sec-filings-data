@@ -16,7 +16,7 @@ SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions"
 
 
 def company_to_ticker(name: str) -> str | None:
-    """Resolve a company name to its stock ticker symbol via Yahoo Finance.
+    """Resolve a company name to its stock ticker symbol via Yahoo finance_data.
 
     Args:
         name: The company name to look up (e.g. ``"Apple Inc"``).

@@ -11,8 +11,8 @@ import numpy as np
 from chromadb.api.models.Collection import Collection
 from openai import OpenAI
 
-from dataloader.text_splitter import Chunk, chunk_markdown
-from earnings_transcripts.transcripts import Transcript
+from finance_data.dataloader.text_splitter import Chunk, chunk_markdown
+from finance_data.earnings_transcripts.transcripts import Transcript
 from settings import sec_settings
 
 _log = logging.getLogger(__name__)

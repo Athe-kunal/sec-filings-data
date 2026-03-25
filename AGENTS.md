@@ -12,9 +12,9 @@
   - `uv run python -m compileall .`
 - If you modify API/server logic, verify imports:
   - `uv run python -c "import server"`
-  - `uv run python -c "import finance_data.api"`
+  - `uv run python -c "import finance_data.finance_data.api"`
 - If you modify SEC download or OCR pipelines, verify module imports:
-  - `uv run python -c "import filings.sec_data, ocr.olmocr_pipeline"`
+  - `uv run python -c "import finance_data.filings.sec_data, finance_data.ocr.olmocr_pipeline"`
 - If you modify MCP workflows, verify the MCP server imports:
   - `uv run --group ocr-md --group mcp python -c "import mcp_server"`
 - Add or update tests when behavior changes.
