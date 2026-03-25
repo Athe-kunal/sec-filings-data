@@ -1,6 +1,6 @@
 [project]
 name = "finance_data_llm"
-version = "0.1.1"
+version = "0.1.2"
 description = "SEC filings and Earnings call transcripts data"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
@@ -48,4 +48,5 @@ include = [
     "filings*",
     "finance_data*",
     "ocr*",
+    "server_api*"
 ]

@@ -27,9 +27,9 @@ class SECSettings(BaseSettings):
     chroma_persist_dir: str = "./chroma_db"
     chroma_collection_name: str = "sec_filings"
 
-    # FastAPI server URL
-    server_url: str = "http://127.0.0.1:8888"
-
+    # Main FastAPI app (uvicorn server:app); Makefile uses API_PORT for the same default.
+    api_host: str = "127.0.0.1"
+    api_port: int = 8888
     # MCP server (FastMCP streamable-http bind + transport DNS rebinding allowlist)
     mcp_host: str = "127.0.0.1"
     mcp_port: int = 8069
