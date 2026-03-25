@@ -2,10 +2,16 @@
 
 import uvicorn
 
+from settings import sec_settings
+
 
 def main() -> None:
     """Start the finance_data API server."""
-    uvicorn.run("server:app", host="0.0.0.0", port=8081)
+    uvicorn.run(
+        "server:app",
+        host=sec_settings.api_host,
+        port=sec_settings.api_port,
+    )
 
 
 if __name__ == "__main__":
