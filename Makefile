@@ -7,7 +7,7 @@ MAX_MODEL_LEN          ?= 16384
 TENSOR_PARALLEL_SIZE   ?= 1
 DATA_PARALLEL_SIZE     ?= 1
 PORT                   ?= 8000
-EMBD_PORT			   ?= 8888
+EMBD_PORT			   ?= 8002
 API_PORT               ?= 8081
 SERVER                 ?= localhost
 IMAGE_NAME             ?= sec-filings-md
@@ -34,7 +34,7 @@ vllm-embd-serve:
 	uv run vllm serve $(EMBD_MODEL) \
 		--gpu-memory-utilization $(EMBD_GPU_MEMORY_UTILIZATION) \
 		--runner pooling \
-		--max-model-len 4096 \
+		--max-model-len 8192 \
 		--port $(EMBD_PORT) \
 		--host $(SERVER)
 

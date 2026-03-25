@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-finance-data-llm-server = "finance_data.finance_data.cli:main"
+finance-data-llm-server = "finance_data.finance_data_api.cli:main"
 
 [dependency-groups]
 ocr-md = [
