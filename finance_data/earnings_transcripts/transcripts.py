@@ -21,6 +21,7 @@ from playwright.async_api import (
     async_playwright,
 )
 
+from finance_data.common import processed_data_index
 from finance_data.settings import sec_settings
 
 
@@ -255,6 +256,11 @@ def save_transcript_markdown(transcript: Transcript) -> Path:
     path = out_dir / f"Q{transcript.quarter_num}_{date_suffix}.md"
     with path.open("w", encoding="utf-8") as f:
         f.write(transcript.to_markdown())
+    processed_data_index.mark_transcript(
+        ticker=transcript.ticker,
+        year=str(transcript.year),
+        quarter=f"Q{transcript.quarter_num}",
+    )
     return path
 
 
