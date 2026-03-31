@@ -1,7 +1,11 @@
 """Helpers for batch SEC and transcript processing."""
 
+import asyncio
 import dataclasses
+from collections.abc import Awaitable, Iterable
+from typing import TypeVar
 
+from finance_data.common import processed_data_index
 from finance_data.earnings_transcripts.transcripts import (
     get_transcript_for_quarter_async,
 )
@@ -11,6 +15,8 @@ from finance_data.server_api.models import (
     BatchEarningsTranscriptItem,
     BatchSecFilingItem,
 )
+
+_T = TypeVar("_T")
 
 
 def serialize_sec_result(sec_result: SecResults) -> dict[str, str]:
@@ -90,6 +96,13 @@ def expand_sec_batch_jobs(
     jobs: list[tuple[str, str, str, bool]] = []
     for item in requests:
         for filing_type in item.filing_types:
+            filing_key = filing_type.strip().upper()
+            if processed_data_index.has_sec_filing(
+                item.ticker,
+                item.year,
+                filing_key,
+            ):
+                continue
             jobs.append((item.ticker, item.year, filing_type, item.force))
     return jobs
 
@@ -102,5 +115,35 @@ def expand_earnings_batch_jobs(
     for item in requests:
         for year in item.years:
             for quarter in item.quarters:
+                quarter_key = quarter.strip().upper()
+                if processed_data_index.has_transcript(
+                    item.ticker,
+                    str(year),
+                    quarter_key,
+                ):
+                    continue
                 jobs.append((item.ticker, year, quarter))
     return jobs
+
+
+async def run_jobs_with_limit(
+    coroutines: Iterable[Awaitable[_T]],
+    max_concurrent: int,
+) -> list[_T]:
+    """Execute coroutine jobs with bounded concurrency."""
+    if max_concurrent <= 0:
+        raise ValueError("max_concurrent must be positive")
+
+    semaphore = asyncio.Semaphore(max_concurrent)
+    tasks = [
+        asyncio.create_task(_run_one_job(coroutine, semaphore))
+        for coroutine in coroutines
+    ]
+    if not tasks:
+        return []
+    return await asyncio.gather(*tasks)
+
+
+async def _run_one_job(coroutine: Awaitable[_T], semaphore: asyncio.Semaphore) -> _T:
+    async with semaphore:
+        return await coroutine
