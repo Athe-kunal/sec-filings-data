@@ -7,15 +7,27 @@ from typing import Any
 
 from loguru import logger
 
+from finance_data.common import processed_data_index
 from finance_data.filings import utils
 from finance_data.filings.models import SecFilingType, SecResults
-from finance_data.ocr.olmocr_pipeline import get_markdown_path, run_olmo_ocr
 from finance_data.settings import sec_settings
 
 
 def sec_data_case_dir(ticker: str, year: str) -> Path:
     """Directory for one ticker/year: ``{sec_data_dir}/{ticker}-{year}/``."""
     return Path(sec_settings.sec_data_dir) / f"{ticker}-{year}"
+
+
+def _load_ocr_pipeline_functions() -> tuple[Any, Any]:
+    """Load OCR functions lazily so non-OCR flows can still import this module."""
+    try:
+        from finance_data.ocr.olmocr_pipeline import get_markdown_path, run_olmo_ocr
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "OCR dependencies are not installed. Install with "
+            "`uv sync --group ocr-md` to use markdown/OCR features."
+        ) from exc
+    return get_markdown_path, run_olmo_ocr
 
 
 def _parse_filing_type_for_sec_query(
@@ -41,6 +53,40 @@ def _parse_filing_type_for_sec_query(
             "Use a single quarterly filing type (10-Q1, 10-Q2, or 10-Q3), not plain 10-Q."
         )
     return None, frozenset({raw})
+
+
+def _normalize_filing_type(filing_type: SecFilingType | str) -> str:
+    return str(filing_type).strip().upper().replace(" ", "")
+
+
+def _find_local_pdf_for_filing_type(
+    ticker: str,
+    year: str,
+    filing_type: SecFilingType | str,
+) -> Path | None:
+    case_dir = sec_data_case_dir(ticker, year)
+    if not case_dir.is_dir():
+        return None
+
+    filing_type_key = _normalize_filing_type(filing_type)
+    if filing_type_key == "10-K":
+        candidates = sorted(case_dir.glob("10-K*.pdf"))
+    elif re.fullmatch(r"10-Q[1-3]", filing_type_key):
+        candidates = sorted(case_dir.glob(f"{filing_type_key}*.pdf"))
+    else:
+        candidates = sorted(case_dir.glob(f"{filing_type_key}.pdf"))
+    return candidates[0] if candidates else None
+
+
+def _build_local_sec_result(pdf_path: Path) -> SecResults:
+    filing_name = pdf_path.stem
+    return SecResults(
+        dashes_acc_num="",
+        form_name=filing_name,
+        filing_date="",
+        report_date="",
+        primary_document=pdf_path.name,
+    )
 
 
 async def get_sec_results(
@@ -153,6 +199,11 @@ async def save_sec_results_as_pdfs(
             f"Failed to save PDF for {ticker} {year} {sec_result.form_name}"
         )
     logger.info(f"Saved SEC PDF to {output_path}")
+    processed_data_index.mark_sec_filing(
+        ticker=ticker,
+        year=year,
+        filing_type=sec_result.form_name,
+    )
     return pdf_paths[0]
 
 
@@ -166,8 +217,16 @@ async def sec_main(
     ``filing_type`` should identify a single filing type, for example
     ``10-K`` or one of ``10-Q1``/``10-Q2``/``10-Q3``.
     """
+    if not ticker.strip():
+        raise ValueError("Ticker is required.")
+    local_pdf_path = _find_local_pdf_for_filing_type(ticker, year, filing_type)
+    if local_pdf_path is not None:
+        local_result = _build_local_sec_result(local_pdf_path)
+        return local_result, local_pdf_path
+
     ticker_name = utils.company_to_ticker(ticker)
-    assert ticker_name, f"The {ticker=} that you provided, is not valid"
+    if ticker_name is None:
+        raise ValueError(f"Ticker {ticker!r} is not valid.")
     sec_results = await get_sec_results(
         ticker=ticker,
         year=year,
@@ -197,6 +256,7 @@ async def sec_main(
 def sec_markdown_path_for_pdf(pdf_path: str | Path) -> Path:
     """Resolve olmOCR markdown output path for a filing PDF path."""
 
+    get_markdown_path, _ = _load_ocr_pipeline_functions()
     return Path(get_markdown_path(sec_settings.olmocr_workspace, str(pdf_path)))
 
 
@@ -215,6 +275,7 @@ async def sec_main_to_markdown(
     markdown_path = sec_markdown_path_for_pdf(pdf_path)
 
     if not markdown_path.exists():
+        _, run_olmo_ocr = _load_ocr_pipeline_functions()
         await run_olmo_ocr(pdf_dir=str(Path(pdf_path).parent))
 
     if not markdown_path.exists():

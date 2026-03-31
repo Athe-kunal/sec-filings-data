@@ -24,7 +24,11 @@ def company_to_ticker(name: str) -> str | None:
         The ticker symbol string (e.g. ``"AAPL"``), or ``None`` if no match
         is found.
     """
-    results = yf.Search(name).quotes
+    normalized_name = name.strip().upper()
+    if not normalized_name:
+        return None
+
+    results = yf.Search(normalized_name).quotes
 
     if not results:
         return None
@@ -60,8 +64,10 @@ def _sec_request_headers(
         company = os.environ.get("SEC_API_ORGANIZATION")
     if email is None:
         email = os.environ.get("SEC_API_EMAIL")
-    assert company
-    assert email
+    if not company:
+        raise ValueError("SEC organization is required for User-Agent header.")
+    if not email:
+        raise ValueError("SEC email is required for User-Agent header.")
     return {
         "User-Agent": f"{company} {email}",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -79,8 +85,12 @@ def _search_url(cik: Union[str, int]) -> str:
 
 async def get_cik_by_ticker(ticker: str) -> str:
     """Gets a CIK number from a stock ticker by running a search on the SEC website."""
+    normalized_ticker = ticker.strip().upper()
+    if not normalized_ticker:
+        raise ValueError("Ticker is required.")
+
     cik_re = re.compile(r".*CIK=(\d{10}).*")
-    url = _search_url(ticker)
+    url = _search_url(normalized_ticker)
     headers = _sec_request_headers()
     timeout = aiohttp.ClientTimeout(total=30)
     async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -89,7 +99,7 @@ async def get_cik_by_ticker(ticker: str) -> str:
             response_text = await response.text()
     results = cik_re.findall(response_text)
     if not results:
-        raise ValueError(f"Couldn't find the CIK for {ticker=}")
+        raise ValueError(f"Couldn't find the CIK for ticker={normalized_ticker!r}")
     return str(results[0])
 
 

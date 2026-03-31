@@ -5,6 +5,7 @@ import asyncio
 
 import re
 from pathlib import Path
+from typing import Any
 
 from finance_data.filings.models import SecFilingType, SecResults
 from finance_data.filings.sec_data import (
@@ -12,10 +13,7 @@ from finance_data.filings.sec_data import (
     save_sec_results_as_pdfs,
     sec_main_to_markdown,
 )
-from finance_data.ocr.olmocr_pipeline import get_markdown_path, run_olmo_ocr
 from finance_data.settings import sec_settings
-
-from .vector_store import ChromaVectorStore
 
 from .repl_env import MarkdownReplEnvironment, markdown_to_repl_env
 
@@ -36,6 +34,32 @@ def _matches_filing_type(sec_result: SecResults, filing_type: SecFilingType | st
     return sec_result.form_name.upper().replace(" ", "") == ft
 
 
+def _sec_case_relative_dir(ticker: str, year: str) -> Path:
+    return Path(sec_settings.sec_data_dir) / f"{ticker}-{year}"
+
+
+def _load_ocr_pipeline_functions() -> tuple[Any, Any]:
+    try:
+        from finance_data.ocr.olmocr_pipeline import get_markdown_path, run_olmo_ocr
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "OCR dependencies are not installed. Install with "
+            "`uv sync --group ocr-md` to use OCR-dependent pipeline features."
+        ) from exc
+    return get_markdown_path, run_olmo_ocr
+
+
+def _load_vector_store_class() -> Any:
+    try:
+        from .vector_store import ChromaVectorStore
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "Vector store dependencies are not installed. Install with "
+            "`uv sync --group ocr-md` to use embedding features."
+        ) from exc
+    return ChromaVectorStore
+
+
 async def ensure_sec_data(
     ticker: str,
     year: str,
@@ -54,7 +78,7 @@ async def ensure_sec_data(
         year=year,
         filing_type=filing_type,
     )
-    output_dir = Path("sec_data") / f"{ticker}-{year}"
+    output_dir = _sec_case_relative_dir(ticker, year)
 
     filtered = [sr for sr in sec_results if _matches_filing_type(sr, filing_type)]
     existing_paths: list[Path] = []
@@ -110,7 +134,9 @@ async def prepare_sec_filing_envs(
         List of MarkdownReplEnvironment, one per filing (e.g. 10-K or 10-Q1..10-Q4).
     """
     workspace_str = str(workspace or sec_settings.olmocr_workspace)
-    pdf_dir_str = f"sec_data/{ticker}-{year}"
+    sec_case_dir = _sec_case_relative_dir(ticker, year)
+    pdf_dir_str = str(sec_case_dir)
+    get_markdown_path, run_olmo_ocr = _load_ocr_pipeline_functions()
 
     sec_results, _pdf_paths = await ensure_sec_data(
         ticker=ticker,
@@ -126,7 +152,7 @@ async def prepare_sec_filing_envs(
     )
 
     envs: list[MarkdownReplEnvironment] = []
-    rel_pdf_base = f"sec_data/{ticker}-{year}"
+    rel_pdf_base = str(sec_case_dir)
     for sr in sec_results:
         source_file = f"{rel_pdf_base}/{sr.form_name}.pdf"
         markdown_path_str = get_markdown_path(workspace_str, source_file)
@@ -157,7 +183,8 @@ async def sec_main_to_markdown_and_embed(
         year=year,
         filing_type=filing_type,
     )
-    vector_store = ChromaVectorStore()
+    vector_store_cls = _load_vector_store_class()
+    vector_store = vector_store_cls()
     embedded_keys = vector_store.from_markdown_sec_filing(
         ticker=ticker,
         year=year,
