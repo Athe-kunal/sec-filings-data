@@ -283,36 +283,6 @@ class ChromaVectorStore:
 
         return ingested
 
-    def from_markdown_sec_filing(
-        self,
-        ticker: str,
-        year: str,
-        filing_type: SecFilingType | str,
-        markdown_path: str | Path,
-        filing_date: str | None = None,
-        force: bool = False,
-    ) -> list[IndexKey]:
-        md_path = Path(markdown_path)
-        if not md_path.exists():
-            raise FileNotFoundError(f"Markdown file not found: {md_path}")
-
-        markdown_text = md_path.read_text(encoding="utf-8")
-        chunks = chunk_markdown(markdown_text)
-        embedded = self._embed_for_upsert(chunks)
-        key = IndexKey(ticker=ticker, year=str(year), filing_type=filing_type)
-
-        self._upsert_document_chunks(
-            ticker=ticker,
-            year=str(year),
-            filing_type=filing_type,
-            filing_date=filing_date,
-            source_path=str(md_path),
-            chunks=embedded.chunks,
-            embeddings=embedded.embeddings,
-            force=force,
-        )
-        return [key]
-
     def from_earnings_transcript_markdown(
         self,
         ticker: str,

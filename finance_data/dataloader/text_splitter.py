@@ -2,7 +2,7 @@ import re
 from dataclasses import dataclass
 
 import markdownify
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
 
 _PAGE_BLOCK_RE = re.compile(
     r"<PAGE-NUM-(\d+)>\s*([\s\S]*?)\s*</PAGE-NUM-\1>",
@@ -14,10 +14,11 @@ _SECTION_TITLE_RE = re.compile(
     r"^(Item\s+\d+[A-C]?\..*|Part\s+[IV]+.*)",
     re.MULTILINE | re.IGNORECASE,
 )
-_SEC_CHUNK_SIZE = 2048
+
+_SEC_CHUNK_SIZE = 1024
 _SEC_CHUNK_OVERLAP = 128
-_EARNINGS_TRANSCRIPT_CHUNK_SIZE = 2048
-_EARNINGS_TRANSCRIPT_OVERLAP = 256
+_EARNINGS_TRANSCRIPT_CHUNK_SIZE = 1024
+_EARNINGS_TRANSCRIPT_OVERLAP = 128
 
 
 @dataclass
@@ -38,6 +39,10 @@ def _extract_section(text: str, current_section: str | None) -> str | None:
     return current_section
 
 
+def alnum_length(text: str) -> int:
+    return sum(1 for c in text if c.isalnum())
+
+
 def _build_splitter(chunk_size: int, overlap: int) -> RecursiveCharacterTextSplitter:
     if chunk_size <= 0:
         raise ValueError("chunk_size must be positive")
@@ -49,9 +54,12 @@ def _build_splitter(chunk_size: int, overlap: int) -> RecursiveCharacterTextSpli
     return RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=overlap,
-        separators=["\n\n", "\n", ". ", " ", ""],
+        separators=RecursiveCharacterTextSplitter.get_separators_for_language(
+            Language.MARKDOWN
+        ),
         keep_separator=False,
         strip_whitespace=True,
+        length_function=alnum_length,
     )
 
 
@@ -72,6 +80,26 @@ def _extract_pages(markdown_text: str) -> list[tuple[int | None, str]]:
 
 def _split_tables(page_text: str) -> tuple[list[str], list[str]]:
     return _TABLE_RE.split(page_text), _TABLE_RE.findall(page_text)
+
+
+def _last_line(text: str) -> str | None:
+    """Return the last non-empty line immediately preceding a table."""
+    stripped = text.rstrip()
+    if not stripped:
+        return None
+
+    last_newline = stripped.rfind("\n")
+    line = stripped[last_newline + 1:].strip()
+    return line or None
+
+
+def _strip_last_line(text: str) -> str:
+    """Return text with the last line removed."""
+    stripped = text.rstrip()
+    last_newline = stripped.rfind("\n")
+    if last_newline == -1:
+        return ""
+    return stripped[:last_newline].rstrip()
 
 
 def chunk_markdown(
@@ -97,9 +125,14 @@ def chunk_markdown(
 
         for part_idx, part in enumerate(non_table_parts):
             clean_text = _PAGE_TAG_RE.sub("", part).strip()
+            preceding_line = _last_line(clean_text)
+            text_body = _strip_last_line(clean_text) if preceding_line else clean_text
+
             if clean_text:
                 current_section = _extract_section(clean_text, current_section)
-                for split_text in splitter.split_text(clean_text):
+
+            if text_body:
+                for split_text in splitter.split_text(text_body):
                     chunks.append(
                         Chunk(
                             text=split_text,
@@ -116,9 +149,13 @@ def chunk_markdown(
                     tables[part_idx].strip(), heading_style="ATX"
                 ).strip()
                 if table_markdown:
+                    if preceding_line:
+                        table_text = f"{preceding_line}\n\n{table_markdown}"
+                    else:
+                        table_text = table_markdown
                     chunks.append(
                         Chunk(
-                            text=table_markdown,
+                            text=table_text,
                             chunk_type="table",
                             page_num=page_num,
                             section_title=current_section,
