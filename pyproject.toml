@@ -14,6 +14,7 @@ dependencies = [
     "yfinance>=1.2.0",
     "numpy>=1.26",
     "httpx>=0.28.1",
+    "vllm>=0.18.1",
 ]
 
 [project.scripts]

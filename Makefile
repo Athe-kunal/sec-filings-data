@@ -4,6 +4,7 @@ RERANKER_MODEL := Qwen/Qwen3-Reranker-0.6B
 
 GPU_MEMORY_UTILIZATION      ?= 0.5
 EMBD_GPU_MEMORY_UTILIZATION ?= 0.1
+RERANKER_GPU_MEMORY_UTILIZATION ?= 0.3
 MAX_MODEL_LEN               ?= 8192
 TENSOR_PARALLEL_SIZE        ?= 1
 DATA_PARALLEL_SIZE          ?= 1
@@ -40,17 +41,16 @@ vllm-embd-serve:
 		--port $(EMBD_PORT) \
 		--host $(SERVER)
 
+# --task score \
+
 .PHONY: vllm-reranker-serve
 vllm-reranker-serve:
 	CUDA_VISIBLE_DEVICES=$(GPU_DEVICE) uv run vllm serve $(RERANKER_MODEL) \
-		--task score \
-		--hf-overrides '{\
-\"architectures\": [\"Qwen3ForSequenceClassification\"], \
-\"classifier_from_token\": [\"no\", \"yes\"], \
-\"is_original_qwen3_reranker\": true\
-}' \
+		--gpu-memory-utilization $(RERANKER_GPU_MEMORY_UTILIZATION) \
+		--hf-overrides '{"architectures": ["Qwen3ForSequenceClassification"], "classifier_from_token": ["no", "yes"], "is_original_qwen3_reranker": true}' \
 		--port $(RERANKER_PORT) \
 		--host $(SERVER)
+
 
 .PHONY: start-server
 start-server:
