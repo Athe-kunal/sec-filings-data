@@ -128,6 +128,7 @@ def _search_transcript_chunks(
     year: str,
     query: str,
     top_k: int,
+    quarter: str | None,
     search_fn: Callable[..., list[tuple[Any, float]]],
 ) -> list[tuple[Any, float, str]]:
     resolved = index.resolve_transcript_quarters(ticker, year)
@@ -138,6 +139,18 @@ def _search_transcript_chunks(
         )
 
     ticker_key, quarters = resolved
+    if quarter is not None:
+        q_key = quarter.upper()
+        if q_key not in quarters:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"No indexed transcript for {q_key} for this ticker/year "
+                    f"(available: {', '.join(quarters)})."
+                ),
+            )
+        quarters = [q_key]
+
     merged: list[tuple[Any, float, str]] = []
     for filing_type in quarters:
         try:
@@ -482,6 +495,7 @@ def search_transcripts(request: TranscriptSearchRequest):
         year=year_s,
         query=request.query,
         top_k=request.top_k,
+        quarter=request.quarter,
         search_fn=_search_chunks,
     )
     if not merged:
@@ -510,6 +524,7 @@ def search_transcripts_bm25(request: TranscriptSearchRequest):
         year=year_s,
         query=request.query,
         top_k=request.top_k,
+        quarter=request.quarter,
         search_fn=_search_chunks_bm25,
     )
     if not merged:
