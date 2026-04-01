@@ -279,11 +279,9 @@ def _parse_speaker_texts(soup: BeautifulSoup) -> list[SpeakerText]:
     return speaker_texts
 
 
-def _parse_earningscall_biz_speaker_texts(soup: BeautifulSoup) -> list[SpeakerText]:
-    content = soup.select_one("div.content.without-focus")
-    if content is None:
-        return []
-
+def _extract_earningscall_biz_speaker_texts_from_content(
+    content: BeautifulSoup,
+) -> list[SpeakerText]:
     speaker_sections = content.select("div.speaker")
     speaker_texts: list[SpeakerText] = []
 
@@ -301,6 +299,19 @@ def _parse_earningscall_biz_speaker_texts(soup: BeautifulSoup) -> list[SpeakerTe
         if speaker or call_text:
             speaker_texts.append(SpeakerText(speaker=speaker, text=call_text))
 
+    return speaker_texts
+
+
+def _parse_earningscall_biz_speaker_texts(soup: BeautifulSoup) -> list[SpeakerText]:
+    content_sections = soup.select("div.content.without-focus")
+    if not content_sections:
+        return []
+
+    speaker_texts: list[SpeakerText] = []
+    for content in content_sections:
+        speaker_texts.extend(
+            _extract_earningscall_biz_speaker_texts_from_content(content)
+        )
     return speaker_texts
 
 
