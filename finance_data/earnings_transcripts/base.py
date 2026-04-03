@@ -11,8 +11,13 @@ from loguru import logger
 if TYPE_CHECKING:
     from finance_data.earnings_transcripts.transcripts import Transcript
 
+TickerStr: TypeAlias = str
+YearInt: TypeAlias = int
+QuarterNum: TypeAlias = int
 
-TranscriptPullFn: TypeAlias = Callable[[str, int, int], Awaitable["Transcript | None"]]
+TranscriptPullFn: TypeAlias = Callable[
+    [TickerStr, YearInt, QuarterNum], Awaitable["Transcript | None"]
+]
 
 
 class TranscriptDataPuller(ABC):
@@ -21,9 +26,9 @@ class TranscriptDataPuller(ABC):
     @abstractmethod
     async def pull_data_for_period(
         self,
-        ticker: str,
-        year: int,
-        quarter_num: int,
+        ticker: TickerStr,
+        year: YearInt,
+        quarter_num: QuarterNum,
     ) -> Transcript | None:
         """Pull transcript data for one ticker, fiscal year, and quarter."""
 
@@ -36,9 +41,9 @@ class DCFDataPull(TranscriptDataPuller):
 
     async def pull_data_for_period(
         self,
-        ticker: str,
-        year: int,
-        quarter_num: int,
+        ticker: TickerStr,
+        year: YearInt,
+        quarter_num: QuarterNum,
     ) -> Transcript | None:
         logger.info(f"Using DCFDataPull {ticker=} {year=} {quarter_num=}")
         return await self._dcf_pull_fn(ticker, year, quarter_num)
@@ -52,9 +57,9 @@ class EarningsBizDataPull(TranscriptDataPuller):
 
     async def pull_data_for_period(
         self,
-        ticker: str,
-        year: int,
-        quarter_num: int,
+        ticker: TickerStr,
+        year: YearInt,
+        quarter_num: QuarterNum,
     ) -> Transcript | None:
         logger.info(f"Using EarningsBizDataPull {ticker=} {year=} {quarter_num=}")
         return await self._earnings_biz_pull_fn(ticker, year, quarter_num)
@@ -73,9 +78,9 @@ class TranscriptFallbackDataPull(TranscriptDataPuller):
 
     async def pull_data_for_period(
         self,
-        ticker: str,
-        year: int,
-        quarter_num: int,
+        ticker: TickerStr,
+        year: YearInt,
+        quarter_num: QuarterNum,
     ) -> Transcript | None:
         logger.info(
             "Pulling transcript with fallback order "
