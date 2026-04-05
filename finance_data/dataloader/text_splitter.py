@@ -14,6 +14,7 @@ _SECTION_TITLE_RE = re.compile(
     r"^(Item\s+\d+[A-C]?\..*|Part\s+[IV]+.*)",
     re.MULTILINE | re.IGNORECASE,
 )
+_OPERATOR_SPEAKER_RE = re.compile(r"\boperator\b", re.IGNORECASE)
 
 _SEC_CHUNK_SIZE = 1024
 _SEC_CHUNK_OVERLAP = 128
@@ -38,6 +39,10 @@ def _extract_section(text: str, current_section: str | None) -> str | None:
     if title_match:
         return title_match.group(0).strip()
     return current_section
+
+
+def _is_operator_speaker(speaker: str) -> bool:
+    return bool(_OPERATOR_SPEAKER_RE.search(speaker))
 
 
 def alnum_length(text: str) -> int:
@@ -216,11 +221,18 @@ def chunk_transcript_rows(
     chunk_size: int = _EARNINGS_TRANSCRIPT_CHUNK_SIZE,
     overlap: int = _EARNINGS_TRANSCRIPT_OVERLAP,
 ) -> list[Chunk]:
-    """Create transcript chunks using RecursiveCharacterTextSplitter overlap."""
+    """Create transcript chunks using RecursiveCharacterTextSplitter overlap.
+
+    Operator turns (speaker name matching 'operator') are not emitted as their
+    own chunks. Instead, their formatted text is buffered and prepended to the
+    first chunk of the following non-operator speaker, providing context for
+    what the operator said before the next participant speaks.
+    """
     splitter = _build_splitter(chunk_size=chunk_size, overlap=overlap)
 
     chunks: list[Chunk] = []
     index = 0
+    pending_operator_text: str = ""
 
     for speaker, text in rows:
         clean_speaker = speaker.strip()
@@ -228,10 +240,27 @@ def chunk_transcript_rows(
         if not clean_text:
             continue
 
-        for part in splitter.split_text(clean_text):
+        if _is_operator_speaker(clean_speaker):
+            operator_line = (
+                f"Speaker: {clean_speaker}\nText: {clean_text}"
+                if clean_speaker
+                else clean_text
+            )
+            pending_operator_text = (
+                f"{pending_operator_text}\n\n{operator_line}"
+                if pending_operator_text
+                else operator_line
+            )
+            continue
+
+        for part_idx, part in enumerate(splitter.split_text(clean_text)):
             chunk_text = (
                 f"Speaker: {clean_speaker}\nText: {part}" if clean_speaker else part
             )
+            if pending_operator_text and part_idx == 0:
+                chunk_text = f"{pending_operator_text}\n\n{chunk_text}"
+                pending_operator_text = ""
+
             chunks.append(
                 Chunk(
                     text=chunk_text,
@@ -242,5 +271,16 @@ def chunk_transcript_rows(
                 )
             )
             index += 1
+
+    if pending_operator_text:
+        chunks.append(
+            Chunk(
+                text=pending_operator_text,
+                chunk_type="text",
+                page_num=None,
+                section_title=None,
+                index=index,
+            )
+        )
 
     return chunks
