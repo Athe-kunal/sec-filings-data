@@ -54,7 +54,7 @@ vllm-reranker-serve:
 
 .PHONY: start-server
 start-server:
-	uv run uvicorn server:app --host 0.0.0.0 --reload --port $(API_PORT)
+	PROCESSED_INDEX_START_WATCHER=true uv run uvicorn server:app --host 0.0.0.0 --reload --port $(API_PORT)
 
 .PHONY: run-ocr
 run-ocr:
@@ -118,3 +118,7 @@ lint:
 lint-check:
 	uv run --group dev black --check .
 	uv run --group dev --group ocr-md --group mcp ty check .
+
+.PHONY: build-cache
+build-cache:
+	uv run python -c "from finance_data.common.processed_data_index import rebuild_processed_data_cache; rebuild_processed_data_cache()"
